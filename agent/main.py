@@ -1,0 +1,2100 @@
+from __future__ import annotations
+
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import requests
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
+
+from auth import AuthError, jwt_decode_hs256, jwt_encode_hs256, verify_password
+from config import Settings, load_settings
+from ddp_control import prepare_ddp_params
+from orientation import infer_orientation, OrientationInfo
+from ddp_sender import DDPConfig
+from ddp_streamer import DDPStreamer
+from geometry import TreeGeometry
+from look_service import LookService
+from pack_io import ensure_dir, read_jsonl
+from preset_importer import PresetImporter
+from rate_limiter import Cooldown
+from sequence_service import SequenceService
+from fleet_sequence_service import FleetSequenceService
+from wled_client import WLEDClient, WLEDError
+from wled_mapper import WLEDMapper
+from fpp_client import FPPClient, FPPError
+from fpp_export import render_http_post_script, write_script
+from show_config import ShowConfig, load_show_config, write_show_config
+from xlights_import import import_xlights_networks_file, show_config_from_xlights_networks
+
+try:
+    from openai_agent import SimpleDirectorAgent
+except Exception:
+    SimpleDirectorAgent = None  # type: ignore
+
+
+app = FastAPI(title="WLED Show Agent v3", version="3.4.0")
+
+
+# ----------------------------
+# Dependency singletons
+# ----------------------------
+SETTINGS: Settings = load_settings()
+ensure_dir(SETTINGS.data_dir)
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    if not SETTINGS.auth_enabled:
+        return await call_next(request)
+
+    path = request.url.path or ""
+    if path == "/" or path.startswith("/ui") or path.startswith("/v1/health") or path.startswith("/v1/auth/login") or path.startswith("/v1/auth/logout"):
+        return await call_next(request)
+
+    # Allow preflight requests to proceed.
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+
+    # Allow either the configured A2A key (if set) or a valid JWT.
+    key = SETTINGS.a2a_api_key
+    if key:
+        cand = (request.headers.get("x-a2a-key") or "").strip()
+        if cand == key:
+            return await call_next(request)
+        auth = request.headers.get("authorization") or ""
+        parts = auth.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip() == key:
+            return await call_next(request)
+
+    tok = _jwt_from_request(request)
+    if tok:
+        try:
+            jwt_decode_hs256(tok, secret=str(SETTINGS.auth_jwt_secret or ""), issuer=str(SETTINGS.auth_jwt_issuer or ""))
+            return await call_next(request)
+        except AuthError:
+            pass
+
+    return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
+
+if SETTINGS.controller_kind != "wled":
+    raise RuntimeError("This app controls WLED devices. For ESPixelStick pixel controllers, run pixel_main:app (CONTROLLER_KIND=pixel).")
+
+WLED = WLEDClient(SETTINGS.wled_tree_url, timeout_s=SETTINGS.wled_http_timeout_s)
+MAPPER = WLEDMapper(WLED)
+
+# Segment IDs (WLED 0.15+ returns segment list in /json/state). If not configured,
+# we attempt to auto-detect from WLED and fall back to [0] if offline.
+SEGMENT_IDS: List[int] = list(SETTINGS.wled_segment_ids)
+if not SEGMENT_IDS:
+    try:
+        SEGMENT_IDS = WLED.get_segment_ids(refresh=True)
+    except Exception:
+        SEGMENT_IDS = []
+if not SEGMENT_IDS:
+    SEGMENT_IDS = [0]
+
+@dataclass(frozen=True)
+class A2APeer:
+    name: str
+    base_url: str
+
+
+def _parse_a2a_peers(entries: List[str]) -> Dict[str, A2APeer]:
+    peers: Dict[str, A2APeer] = {}
+    for raw in entries:
+        item = str(raw).strip()
+        if not item:
+            continue
+        if "=" in item:
+            name, url = item.split("=", 1)
+            name = name.strip()
+            url = url.strip()
+        else:
+            name = ""
+            url = item
+        if not url:
+            continue
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "http://" + url
+        url = url.rstrip("/")
+        if not name:
+            try:
+                from urllib.parse import urlparse
+                p = urlparse(url)
+                host = p.hostname or "peer"
+                name = host
+                if p.port:
+                    name = f"{host}:{p.port}"
+            except Exception:
+                name = url
+        peers[name] = A2APeer(name=name, base_url=url)
+    return peers
+
+
+PEERS: Dict[str, A2APeer] = _parse_a2a_peers(list(SETTINGS.a2a_peers))
+
+
+def _require_a2a_auth(
+    request: Request,
+    x_a2a_key: str | None = Header(default=None, alias="X-A2A-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    key = SETTINGS.a2a_api_key
+    candidate = x_a2a_key
+    if (not candidate) and authorization:
+        parts = str(authorization).strip().split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            candidate = parts[1].strip()
+
+    # If JWT auth is enabled, allow either a valid A2A key (if set) or a valid JWT.
+    if SETTINGS.auth_enabled:
+        if key and candidate == key:
+            return
+        tok = _jwt_from_request(request)
+        if not tok:
+            raise HTTPException(status_code=401, detail="Missing token")
+        try:
+            jwt_decode_hs256(tok, secret=str(SETTINGS.auth_jwt_secret or ""), issuer=str(SETTINGS.auth_jwt_issuer or ""))
+            return
+        except AuthError as e:
+            raise HTTPException(status_code=401, detail=str(e))
+
+    # Legacy mode: only enforce A2A key if configured.
+    if not key:
+        return
+    if candidate != key:
+        raise HTTPException(status_code=401, detail="Missing or invalid A2A key")
+
+
+def _get_orientation(refresh: bool = False) -> OrientationInfo | None:
+    """Best-effort: derive a street-facing orientation mapping for 4-segment quarter trees."""
+    ordered = list(SEGMENT_IDS)
+    try:
+        from segment_layout import fetch_segment_layout
+        layout = fetch_segment_layout(WLED, segment_ids=SEGMENT_IDS, refresh=refresh)
+        if layout and layout.segments:
+            ordered = layout.ordered_ids()
+    except Exception:
+        ordered = list(SEGMENT_IDS)
+
+    if not ordered:
+        return None
+
+    try:
+        return infer_orientation(
+            ordered_segment_ids=[int(x) for x in ordered],
+            right_segment_id=int(SETTINGS.quad_right_segment_id),
+            order_direction_from_street=str(SETTINGS.quad_order_from_street),
+        )
+    except Exception:
+        return None
+
+LOOKS = LookService(
+    wled=WLED,
+    mapper=MAPPER,
+    data_dir=SETTINGS.data_dir,
+    max_bri=SETTINGS.wled_max_bri,
+    segment_ids=SEGMENT_IDS,
+    replicate_to_all_segments=SETTINGS.wled_replicate_to_all_segments,
+)
+
+COOLDOWN = Cooldown(SETTINGS.wled_command_cooldown_ms)
+IMPORTER = PresetImporter(
+    wled=WLED,
+    mapper=MAPPER,
+    cooldown=COOLDOWN,
+    max_bri=SETTINGS.wled_max_bri,
+    segment_ids=SEGMENT_IDS,
+    replicate_to_all_segments=SETTINGS.wled_replicate_to_all_segments,
+)
+
+GEOM = TreeGeometry(
+    runs=SETTINGS.tree_runs,
+    pixels_per_run=SETTINGS.tree_pixels_per_run,
+    segment_len=SETTINGS.tree_segment_len,
+    segments_per_run=SETTINGS.tree_segments_per_run,
+)
+
+DDP_CFG = DDPConfig(
+    host=SETTINGS.ddp_host,
+    port=SETTINGS.ddp_port,
+    destination_id=SETTINGS.ddp_destination_id,
+    max_pixels_per_packet=SETTINGS.ddp_max_pixels_per_packet,
+)
+
+DDP = DDPStreamer(
+    wled=WLED,
+    geometry=GEOM,
+    ddp_cfg=DDP_CFG,
+    fps_default=SETTINGS.ddp_fps_default,
+    fps_max=SETTINGS.ddp_fps_max,
+    segment_ids=SEGMENT_IDS,
+)
+
+SEQUENCES = SequenceService(wled=WLED, looks=LOOKS, ddp=DDP, data_dir=SETTINGS.data_dir)
+
+FPP: FPPClient | None = None
+if SETTINGS.fpp_base_url:
+    FPP = FPPClient(
+        base_url=SETTINGS.fpp_base_url,
+        timeout_s=SETTINGS.fpp_http_timeout_s,
+        headers={k: v for (k, v) in SETTINGS.fpp_headers},
+    )
+
+FLEET_SEQUENCES: FleetSequenceService | None = None
+
+
+DIRECTOR = None
+if SETTINGS.openai_api_key and SimpleDirectorAgent is not None:
+    def _tool_apply_random_look(kwargs: Dict[str, Any]) -> Any:
+        # If peers are configured, keep devices visually consistent by picking a look_spec locally
+        # and broadcasting that exact spec to all peers.
+        if PEERS:
+            pack, row = LOOKS.choose_random(theme=kwargs.get("theme"), seed=kwargs.get("seed"))
+            bri = kwargs.get("brightness")
+            bri_i: Optional[int] = None
+            if bri is not None:
+                bri_i = min(SETTINGS.wled_max_bri, max(1, int(bri)))
+
+            out: Dict[str, Any] = {
+                "picked": {"pack_file": pack, "id": row.get("id"), "name": row.get("name"), "theme": row.get("theme")}
+            }
+            # apply locally
+            try:
+                COOLDOWN.wait()
+                out["self"] = {"ok": True, "result": LOOKS.apply_look(row, brightness_override=bri_i)}
+            except Exception as e:
+                out["self"] = {"ok": False, "error": str(e)}
+
+            # apply to peers
+            timeout_s = float(SETTINGS.a2a_http_timeout_s)
+            eligible: List[A2APeer] = []
+            for peer in PEERS.values():
+                actions = _peer_supported_actions(peer, timeout_s=timeout_s)
+                if "apply_look_spec" in actions:
+                    eligible.append(peer)
+                else:
+                    out[peer.name] = {"ok": False, "skipped": True, "reason": "Peer does not support apply_look_spec"}
+
+            if eligible:
+                payload = {"action": "apply_look_spec", "params": {"look_spec": row, "brightness_override": bri_i}}
+                with ThreadPoolExecutor(max_workers=min(8, len(eligible))) as ex:
+                    futs = {
+                        ex.submit(_peer_post, peer, "/v1/a2a/invoke", payload, timeout_s=timeout_s): peer
+                        for peer in eligible
+                    }
+                    for fut in as_completed(futs):
+                        peer = futs[fut]
+                        try:
+                            out[peer.name] = fut.result()
+                        except Exception as e:
+                            out[peer.name] = {"ok": False, "error": str(e)}
+            return out
+
+        return LOOKS.apply_random(theme=kwargs.get("theme"), brightness=kwargs.get("brightness"), seed=kwargs.get("seed"))
+
+    def _tool_start_ddp(kwargs: Dict[str, Any]) -> Any:
+        # Allow the model to specify direction/start_pos as top-level kwargs (more reliable)
+        params = dict(kwargs.get("params") or {})
+        if kwargs.get("direction") and "direction" not in params:
+            params["direction"] = kwargs.get("direction")
+        if kwargs.get("start_pos") and "start_pos" not in params:
+            params["start_pos"] = kwargs.get("start_pos")
+
+        ori = _get_orientation(refresh=False)
+        params = prepare_ddp_params(
+            pattern=str(kwargs.get("pattern")),
+            params=params,
+            orientation=ori,
+            default_start_pos=str(SETTINGS.quad_default_start_pos),
+        )
+
+        return DDP.start(
+            pattern=str(kwargs.get("pattern")),
+            params=params,
+            duration_s=float(kwargs.get("duration_s", 30.0)),
+            brightness=min(SETTINGS.wled_max_bri, int(kwargs.get("brightness", 128))),
+            fps=float(kwargs.get("fps", SETTINGS.ddp_fps_default)),
+        ).__dict__
+
+    def _tool_stop_ddp(kwargs: Dict[str, Any]) -> Any:
+        return DDP.stop().__dict__
+
+    def _tool_stop_all(kwargs: Dict[str, Any]) -> Any:
+        # Stop locally, and if peers exist stop them too.
+        out: Dict[str, Any] = {}
+        try:
+            out["self"] = {"ok": True, "result": _a2a_action_stop_all({})}
+        except Exception as e:
+            out["self"] = {"ok": False, "error": str(e)}
+
+        if PEERS:
+            payload = {"action": "stop_all", "params": {}}
+            timeout_s = float(SETTINGS.a2a_http_timeout_s)
+            with ThreadPoolExecutor(max_workers=min(8, len(PEERS))) as ex:
+                futs = {
+                    ex.submit(_peer_post, peer, "/v1/a2a/invoke", payload, timeout_s=timeout_s): peer
+                    for peer in PEERS.values()
+                }
+                for fut in as_completed(futs):
+                    peer = futs[fut]
+                    try:
+                        out[peer.name] = fut.result()
+                    except Exception as e:
+                        out[peer.name] = {"ok": False, "error": str(e)}
+        return out
+
+    def _tool_generate_pack(kwargs: Dict[str, Any]) -> Any:
+        total = int(kwargs.get("total_looks", 800))
+        themes = kwargs.get("themes") or ["classic", "candy_cane", "icy", "warm_white", "rainbow"]
+        bri = int(kwargs.get("brightness", SETTINGS.wled_max_bri))
+        seed = int(kwargs.get("seed", 1337))
+        return LOOKS.generate_pack(
+            total_looks=total,
+            themes=themes,
+            brightness=bri,
+            seed=seed,
+            write_files=True,
+            include_multi_segment=True,
+        ).__dict__
+
+    def _tool_fleet_start_sequence(kwargs: Dict[str, Any]) -> Any:
+        if FLEET_SEQUENCES is None:
+            return {"ok": False, "error": "Fleet sequences are not available."}
+        file = str(kwargs.get("file") or kwargs.get("sequence_file") or "").strip()
+        if not file:
+            return {"ok": False, "error": "Missing 'file'."}
+        targets = kwargs.get("targets")
+        if targets is not None and not isinstance(targets, list):
+            targets = None
+        include_self = bool(kwargs.get("include_self", True))
+        loop = bool(kwargs.get("loop", False))
+        timeout_s = kwargs.get("timeout_s")
+        try:
+            st = FLEET_SEQUENCES.start(
+                file=file,
+                loop=loop,
+                targets=[str(x) for x in (targets or [])] if targets else None,
+                include_self=include_self,
+                timeout_s=float(timeout_s) if timeout_s is not None else None,
+            )
+            return {"ok": True, "status": st.__dict__}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _tool_fleet_stop_sequence(_: Dict[str, Any]) -> Any:
+        if FLEET_SEQUENCES is None:
+            return {"ok": False, "error": "Fleet sequences are not available."}
+        try:
+            st = FLEET_SEQUENCES.stop()
+            return {"ok": True, "status": st.__dict__}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _tool_fpp_start_playlist(kwargs: Dict[str, Any]) -> Any:
+        if FPP is None:
+            return {"ok": False, "error": "FPP is not configured; set FPP_BASE_URL."}
+        name = str(kwargs.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "Missing 'name'."}
+        repeat = bool(kwargs.get("repeat", False))
+        try:
+            return {"ok": True, "fpp": FPP.start_playlist(name, repeat=repeat).as_dict()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _tool_fpp_stop_playlist(_: Dict[str, Any]) -> Any:
+        if FPP is None:
+            return {"ok": False, "error": "FPP is not configured; set FPP_BASE_URL."}
+        try:
+            return {"ok": True, "fpp": FPP.stop_playlist().as_dict()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _tool_fpp_trigger_event(kwargs: Dict[str, Any]) -> Any:
+        if FPP is None:
+            return {"ok": False, "error": "FPP is not configured; set FPP_BASE_URL."}
+        try:
+            eid = int(kwargs.get("event_id"))
+        except Exception:
+            return {"ok": False, "error": "event_id must be an integer > 0"}
+        try:
+            return {"ok": True, "fpp": FPP.trigger_event(eid).as_dict()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # Add orientation context so "clockwise" and "front" mean what you expect from the street.
+    ori = _get_orientation(refresh=False)
+    ori_txt = ""
+    if ori is not None and ori.kind == "quarters":
+        pos = ori.positions
+        ori_txt = (
+            "\nStreet orientation (from the street, facing the house): "
+            f"right segment={pos.get('right')}, back={pos.get('back')}, left={pos.get('left')}, front={pos.get('front')}. "
+            f"Increasing segment order is {ori.order_direction_from_street}. "
+            "When the user requests clockwise/counterclockwise motion, set direction='cw' or direction='ccw' in start_ddp_pattern. "
+            "For quadrant chases, prefer starting at start_pos='front' unless the user specifies otherwise.\n"
+        )
+
+    system_prompt = (
+        "You are a show director for a WLED Christmas mega tree. The tree is split into 4 segments (quadrants). "
+        "Use tools to apply looks or start DDP patterns. "
+        "Use stop_all to stop everything. "
+        "You can also start/stop fleet sequences across multiple controllers, and optionally control Falcon Player (FPP) if configured. "
+        "Be concise. Prefer apply_random_look for general requests, and start_ddp_pattern for realtime animation requests. "
+        "For quadrant motion, use DDP patterns like 'quad_chase', 'opposite_pulse', 'quad_twinkle', 'quad_comets', and 'quad_spiral'. "
+        + ori_txt
+    )
+
+    DIRECTOR = SimpleDirectorAgent(
+        api_key=SETTINGS.openai_api_key,
+        model=SETTINGS.openai_model,
+        tools={
+            "apply_random_look": _tool_apply_random_look,
+            "start_ddp_pattern": _tool_start_ddp,
+            "stop_ddp": _tool_stop_ddp,
+            "stop_all": _tool_stop_all,
+            "generate_looks_pack": _tool_generate_pack,
+            "fleet_start_sequence": _tool_fleet_start_sequence,
+            "fleet_stop_sequence": _tool_fleet_stop_sequence,
+            "fpp_start_playlist": _tool_fpp_start_playlist,
+            "fpp_stop_playlist": _tool_fpp_stop_playlist,
+            "fpp_trigger_event": _tool_fpp_trigger_event,
+        },
+        system_prompt=system_prompt,
+    )
+
+
+# ----------------------------
+# Models
+# ----------------------------
+
+class ApplyStateRequest(BaseModel):
+    state: Dict[str, Any] = Field(..., description="Partial or full WLED /json/state payload")
+
+
+class GenerateLooksRequest(BaseModel):
+    total_looks: int = Field(800, ge=50, le=5000)
+    themes: List[str] = Field(default_factory=lambda: ["classic", "candy_cane", "icy", "warm_white", "rainbow"])
+    brightness: int = Field(180, ge=1, le=255)
+    seed: int = Field(1337)
+    write_files: bool = True
+    include_multi_segment: bool = True
+
+
+class ApplyRandomLookRequest(BaseModel):
+    theme: Optional[str] = None
+    pack_file: Optional[str] = None
+    brightness: Optional[int] = Field(default=None, ge=1, le=255)
+    seed: Optional[int] = None
+
+
+class ImportPresetsRequest(BaseModel):
+    pack_file: str
+    start_id: int = Field(120, ge=1, le=250)
+    limit: int = Field(50, ge=1, le=250)
+    name_prefix: str = "AI"
+    include_brightness: bool = True
+    save_bounds: bool = True
+
+
+class DDPStartRequest(BaseModel):
+    pattern: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    duration_s: float = Field(30.0, ge=0.1, le=600.0)
+    brightness: int = Field(128, ge=1, le=255)
+    fps: Optional[float] = Field(default=None, ge=1.0, le=60.0)
+    direction: Optional[str] = Field(default=None, description="Rotation direction from street: cw or ccw")
+    start_pos: Optional[str] = Field(default=None, description="Start position from street: front/right/back/left")
+
+
+class GoCrazyRequest(BaseModel):
+    total_looks: int = Field(1500, ge=50, le=8000)
+    themes: List[str] = Field(default_factory=lambda: ["classic", "candy_cane", "icy", "warm_white", "rainbow", "halloween"])
+    write_files: bool = True
+    import_presets: bool = False
+    import_start_id: int = Field(120, ge=1, le=250)
+    import_limit: int = Field(50, ge=1, le=250)
+    sequences: int = Field(10, ge=0, le=100)
+    sequence_duration_s: int = Field(240, ge=10, le=3600)
+    step_s: int = Field(8, ge=1, le=60)
+    include_ddp: bool = True
+    brightness: int = Field(180, ge=1, le=255)
+    seed: int = Field(1337)
+
+
+class GenerateSequenceRequest(BaseModel):
+    name: str = "Mix"
+    pack_file: Optional[str] = None
+    duration_s: int = Field(240, ge=10, le=3600)
+    step_s: int = Field(8, ge=1, le=60)
+    include_ddp: bool = True
+    seed: int = Field(1337)
+
+
+class PlaySequenceRequest(BaseModel):
+    file: str
+    loop: bool = False
+
+
+class CommandRequest(BaseModel):
+    text: str
+
+
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class FPPStartPlaylistRequest(BaseModel):
+    name: str
+    repeat: bool = False
+
+
+class FPPTriggerEventRequest(BaseModel):
+    event_id: int = Field(..., ge=1)
+
+
+class FPPProxyRequest(BaseModel):
+    method: str = Field("GET", description="HTTP method to use against FPP (GET/POST/PUT/DELETE).")
+    path: str = Field(..., description="Path on the FPP server (e.g. /api/fppd/status).")
+    params: Dict[str, Any] = Field(default_factory=dict)
+    json_body: Any = None
+
+
+class ShowConfigLoadRequest(BaseModel):
+    file: str = Field(..., description="Path relative to DATA_DIR (e.g. show/show_config.json)")
+
+
+class XlightsImportNetworksRequest(BaseModel):
+    networks_file: str = Field(..., description="Path relative to DATA_DIR (e.g. xlights/xlights_networks.xml)")
+    out_file: str = Field("show/show_config_xlights.json", description="Output path relative to DATA_DIR")
+    show_name: str = "xlights-import"
+    subnet: Optional[str] = "172.16.200.0/24"
+    coordinator_base_url: Optional[str] = Field(
+        default=None, description="Coordinator URL as reachable from FPP (e.g. http://172.16.200.10:8088)"
+    )
+    fpp_base_url: Optional[str] = Field(default=None, description="Optional: FPP base URL (e.g. http://172.16.200.20)")
+
+
+class FleetSequenceStartRequest(BaseModel):
+    file: str
+    loop: bool = False
+    targets: Optional[List[str]] = None
+    include_self: bool = True
+    timeout_s: Optional[float] = Field(default=None, ge=0.1, le=30.0)
+
+
+class FPPExportFleetSequenceScriptRequest(BaseModel):
+    sequence_file: str = Field(..., description="A generated sequence file in DATA_DIR/sequences (e.g. sequence_Mix_*.json)")
+    coordinator_base_url: Optional[str] = Field(default=None, description="Coordinator URL as reachable from the FPP host.")
+    show_config_file: Optional[str] = Field(
+        default=None, description="Optional: load coordinator URL from a show config file under DATA_DIR."
+    )
+    out_filename: str = Field("start_fleet_sequence.sh", description="Script filename to write under DATA_DIR/fpp/scripts")
+    include_a2a_key: bool = Field(default=False, description="If true, embed A2A_API_KEY in the script header.")
+    loop: bool = False
+    targets: Optional[List[str]] = None
+    include_self: bool = True
+
+
+class FPPExportFleetStopAllScriptRequest(BaseModel):
+    coordinator_base_url: Optional[str] = Field(default=None, description="Coordinator URL as reachable from the FPP host.")
+    show_config_file: Optional[str] = Field(
+        default=None, description="Optional: load coordinator URL from a show config file under DATA_DIR."
+    )
+    out_filename: str = Field("fleet_stop_all.sh", description="Script filename to write under DATA_DIR/fpp/scripts")
+    include_a2a_key: bool = Field(default=False, description="If true, embed A2A_API_KEY in the script header.")
+    targets: Optional[List[str]] = None
+    include_self: bool = True
+
+class A2AInvokeRequest(BaseModel):
+    action: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    request_id: Optional[str] = None
+
+
+class FleetInvokeRequest(BaseModel):
+    action: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    targets: Optional[List[str]] = None  # peer names; default: all configured peers
+    include_self: bool = True
+    timeout_s: Optional[float] = Field(default=None, ge=0.1, le=30.0)
+
+
+class FleetApplyRandomLookRequest(BaseModel):
+    theme: Optional[str] = None
+    pack_file: Optional[str] = None
+    brightness: Optional[int] = Field(default=None, ge=1, le=255)
+    seed: Optional[int] = None
+    targets: Optional[List[str]] = None
+    include_self: bool = True
+
+
+class FleetStopAllRequest(BaseModel):
+    targets: Optional[List[str]] = None
+    include_self: bool = True
+    timeout_s: Optional[float] = Field(default=None, ge=0.1, le=30.0)
+
+
+# ----------------------------
+# Routes
+# ----------------------------
+
+@app.get("/", include_in_schema=False)
+def root() -> Response:
+    if SETTINGS.ui_enabled:
+        return RedirectResponse(url="/ui", status_code=302)
+    return JSONResponse(status_code=200, content={"ok": True, "service": "wled-show-agent", "version": app.version})
+
+
+def _ui_login_html(*, message: str | None = None) -> str:
+    msg = (message or "").strip()
+    msg_html = f"<div class='msg'>{msg}</div>" if msg else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WLED Show Agent — Login</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; }}
+    .wrap {{ max-width: 520px; margin: 0 auto; padding: 20px; }}
+    .card {{ border: 1px solid rgba(127,127,127,.35); border-radius: 14px; padding: 18px; background: rgba(127,127,127,.06); }}
+    h1 {{ font-size: 20px; margin: 0 0 10px; }}
+    .row {{ display: grid; grid-template-columns: 1fr; gap: 10px; }}
+    label {{ font-size: 13px; opacity: .85; }}
+    input {{ width: 100%; padding: 12px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.45); background: transparent; }}
+    button {{ width: 100%; padding: 12px; border-radius: 10px; border: 0; background: #2563eb; color: #fff; font-weight: 600; }}
+    button:disabled {{ opacity: .6; }}
+    .msg {{ margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: rgba(220, 38, 38, .12); border: 1px solid rgba(220, 38, 38, .35); }}
+    .foot {{ margin-top: 14px; font-size: 12px; opacity: .75; }}
+    a {{ color: inherit; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>WLED Show Agent</h1>
+      <div class="row">
+        <div>
+          <label for="u">Username</label>
+          <input id="u" autocomplete="username" />
+        </div>
+        <div>
+          <label for="p">Password</label>
+          <input id="p" type="password" autocomplete="current-password" />
+        </div>
+        <button id="btn">Sign in</button>
+        {msg_html}
+        <div class="foot">Uses an HttpOnly cookie JWT. Keep this service on your LAN.</div>
+      </div>
+    </div>
+  </div>
+<script>
+  const btn = document.getElementById('btn');
+  const u = document.getElementById('u');
+  const p = document.getElementById('p');
+  async function login() {{
+    btn.disabled = true;
+    try {{
+      const resp = await fetch('/v1/auth/login', {{
+        method: 'POST',
+        credentials: 'include',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ username: u.value || '', password: p.value || '' }})
+      }});
+      const data = await resp.json().catch(() => ({{ ok:false, error:'Invalid JSON' }}));
+      if (!resp.ok || !data.ok) {{
+        const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ('Login failed (' + resp.status + ')');
+        window.location = '/ui?msg=' + encodeURIComponent(msg);
+        return;
+      }}
+      window.location = '/ui';
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }}
+  btn.addEventListener('click', login);
+  p.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') login(); }});
+  u.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') login(); }});
+  u.focus();
+</script>
+</body>
+</html>
+"""
+
+
+def _ui_app_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WLED Show Agent</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; }
+    header { position: sticky; top: 0; backdrop-filter: blur(8px); background: rgba(0,0,0,.04); border-bottom: 1px solid rgba(127,127,127,.25); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 14px 14px 80px; }
+    h1 { font-size: 18px; margin: 0; }
+    .top { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 12px 14px; }
+    .btn { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: rgba(127,127,127,.08); }
+    .btn.primary { background: #16a34a; border-color: rgba(22,163,74,.5); color: #fff; font-weight: 650; }
+    .btn.danger { background: #dc2626; border-color: rgba(220,38,38,.6); color: #fff; font-weight: 650; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+    @media (min-width: 860px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 14px; padding: 12px; background: rgba(127,127,127,.06); }
+    .card h2 { font-size: 14px; margin: 0 0 8px; opacity: .9; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    label { font-size: 12px; opacity: .8; }
+    input, select, textarea { width: 100%; padding: 10px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.45); background: transparent; }
+    textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+    .muted { opacity: .75; font-size: 12px; }
+    .split { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    @media (min-width: 520px) { .split { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <div>
+        <h1>WLED Show Agent</h1>
+        <div class="muted" id="who"></div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn" id="refresh">Refresh</button>
+        <button class="btn danger" id="stopAll">Stop all</button>
+        <button class="btn" id="logout">Logout</button>
+      </div>
+    </div>
+  </header>
+  <div class="wrap">
+    <div class="grid">
+      <div class="card">
+        <h2>Status</h2>
+        <div class="row">
+          <div class="mono" id="status">Loading…</div>
+        </div>
+      </div>
+
+	      <div class="card">
+	        <h2>Quick Look</h2>
+	        <div class="row">
+	          <div class="split">
+	            <div>
+	              <label>Theme (optional)</label>
+	              <input id="lookTheme" placeholder="classic / candy_cane / icy / ..." />
+	            </div>
+	            <div>
+	              <label>Brightness (optional)</label>
+	              <input id="lookBri" type="number" min="1" max="255" placeholder="180" />
+	            </div>
+	          </div>
+	          <div class="split">
+	            <div>
+	              <label>Scope</label>
+	              <select id="lookScope">
+	                <option value="local">local</option>
+	                <option value="fleet">fleet</option>
+	              </select>
+	            </div>
+	            <div>
+	              <label>Targets (optional)</label>
+	              <input id="lookTargets" placeholder="roofline1,roofline2" />
+	            </div>
+	          </div>
+	          <button class="btn primary" id="applyLook">Apply random look</button>
+	          <div class="mono" id="lookOut"></div>
+	        </div>
+	      </div>
+
+	      <div class="card">
+	        <h2>Realtime Pattern (DDP)</h2>
+	        <div class="row">
+	          <div class="split">
+            <div>
+              <label>Pattern</label>
+              <select id="pat"></select>
+            </div>
+            <div>
+              <label>Duration (s)</label>
+              <input id="dur" type="number" min="0.1" max="600" value="30" />
+            </div>
+            <div>
+              <label>Brightness</label>
+              <input id="bri" type="number" min="1" max="255" value="128" />
+            </div>
+            <div>
+              <label>FPS (optional)</label>
+              <input id="fps" type="number" min="1" max="60" placeholder="20" />
+            </div>
+            <div>
+              <label>Direction (optional)</label>
+              <select id="dir">
+                <option value="">(auto)</option>
+                <option value="cw">cw</option>
+                <option value="ccw">ccw</option>
+              </select>
+            </div>
+	            <div>
+	              <label>Start pos (optional)</label>
+	              <select id="pos">
+	                <option value="">(auto)</option>
+	                <option value="front">front</option>
+	                <option value="right">right</option>
+	                <option value="back">back</option>
+	                <option value="left">left</option>
+	              </select>
+	            </div>
+	            <div>
+	              <label>Scope</label>
+	              <select id="patScope">
+	                <option value="local">local</option>
+	                <option value="fleet">fleet</option>
+	              </select>
+	            </div>
+	            <div>
+	              <label>Targets (optional)</label>
+	              <input id="patTargets" placeholder="roofline1,star_esps" />
+	            </div>
+	          </div>
+	          <div style="display:flex; gap:8px;">
+	            <button class="btn primary" id="startPat">Start</button>
+	            <button class="btn" id="stopPat">Stop</button>
+	          </div>
+	          <div class="mono" id="patOut"></div>
+	        </div>
+	      </div>
+
+	      <div class="card">
+	        <h2>Fleet Sequence</h2>
+	        <div class="row">
+	          <div>
+	            <label>Sequence file</label>
+	            <select id="seqFile"></select>
+	          </div>
+	          <div class="split">
+	            <div>
+	              <label>Loop</label>
+	              <select id="seqLoop">
+	                <option value="false">false</option>
+	                <option value="true">true</option>
+	              </select>
+	            </div>
+	            <div>
+	              <label>Targets (optional)</label>
+	              <input id="seqTargets" placeholder="roofline1,roofline2" />
+	            </div>
+	          </div>
+	          <div style="display:flex; gap:8px;">
+	            <button class="btn primary" id="seqStart">Start</button>
+	            <button class="btn" id="seqStop">Stop</button>
+	          </div>
+	          <div class="mono" id="seqOut"></div>
+	        </div>
+	      </div>
+
+	      <div class="card">
+	        <h2>Chat (optional)</h2>
+	        <div class="row">
+	          <div class="muted">Uses <span class="mono">/v1/command</span> (requires <span class="mono">OPENAI_API_KEY</span>).</div>
+          <textarea id="chatIn" placeholder="e.g. 'make it candy cane and a bit brighter'"></textarea>
+          <button class="btn primary" id="chatSend">Send</button>
+          <div class="mono" id="chatOut"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+	<script>
+	  const $ = (id) => document.getElementById(id);
+	  const pretty = (x) => { try { return JSON.stringify(x, null, 2); } catch { return String(x); } };
+	  const parseTargets = (s) => {
+	    const raw = (s || '').split(',').map((x) => (x || '').trim()).filter(Boolean);
+	    return raw.length ? raw : null;
+	  };
+	  async function api(path, opts) {
+	    const o = opts || {};
+	    o.credentials = 'include';
+	    o.headers = Object.assign({ 'Content-Type': 'application/json' }, o.headers || {});
+	    if (o.body && typeof o.body !== 'string') o.body = JSON.stringify(o.body);
+    const resp = await fetch(path, o);
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ('HTTP ' + resp.status);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+	  async function loadPatterns() {
+	    try {
+	      const d = await api('/v1/ddp/patterns', { method: 'GET' });
+	      const sel = $('pat');
+	      sel.innerHTML = '';
+      (d.patterns || []).forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        sel.appendChild(opt);
+      });
+    } catch (e) {
+      $('patOut').textContent = 'Failed to load patterns: ' + e.message;
+	    }
+	  }
+
+	  async function loadSequences() {
+	    try {
+	      const d = await api('/v1/sequences/list', { method: 'GET' });
+	      const sel = $('seqFile');
+	      sel.innerHTML = '';
+	      (d.files || []).forEach((f) => {
+	        const opt = document.createElement('option');
+	        opt.value = f;
+	        opt.textContent = f;
+	        sel.appendChild(opt);
+	      });
+	    } catch (e) {
+	      $('seqOut').textContent = 'Failed to load sequences: ' + e.message;
+	    }
+	  }
+
+	  async function refresh() {
+	    const out = {};
+	    try { out.health = await api('/v1/health', { method: 'GET' }); } catch (e) { out.health = { ok:false, error:e.message }; }
+	    try { out.wled = await api('/v1/wled/info', { method: 'GET' }); } catch (e) { out.wled = { ok:false, error:e.message }; }
+	    try { out.ddp = await api('/v1/ddp/status', { method: 'GET' }); } catch (e) { out.ddp = { ok:false, error:e.message }; }
+	    try { out.sequence = await api('/v1/sequences/status', { method: 'GET' }); } catch (e) { out.sequence = { ok:false, error:e.message }; }
+    try { out.fleet = await api('/v1/fleet/peers', { method: 'GET' }); } catch (e) { out.fleet = { ok:false, error:e.message }; }
+    try {
+      out.fleet_status = await api('/v1/fleet/invoke', { method: 'POST', body: { action: 'status', params: {}, include_self: true } });
+    } catch (e) {
+      out.fleet_status = { ok:false, error:e.message };
+    }
+    $('status').textContent = pretty(out);
+  }
+
+  async function whoami() {
+    try {
+      const me = await api('/v1/auth/me', { method: 'GET' });
+      $('who').textContent = 'Signed in as ' + (me.user && me.user.username ? me.user.username : 'user');
+    } catch {
+      $('who').textContent = '';
+    }
+  }
+
+	  $('refresh').addEventListener('click', refresh);
+	  $('applyLook').addEventListener('click', async () => {
+	    $('lookOut').textContent = '';
+	    try {
+	      const theme = ($('lookTheme').value || '').trim() || null;
+	      const briRaw = ($('lookBri').value || '').trim();
+	      const brightness = briRaw ? parseInt(briRaw, 10) : null;
+	      const scope = ($('lookScope').value || 'local').trim();
+	      const targets = parseTargets(($('lookTargets').value || '').trim());
+	      const path = (scope === 'fleet') ? '/v1/fleet/apply_random_look' : '/v1/looks/apply_random';
+	      const body = (scope === 'fleet') ? { theme, brightness, targets, include_self: true } : { theme, brightness };
+	      const res = await api(path, { method: 'POST', body });
+	      $('lookOut').textContent = pretty(res);
+	      refresh();
+	    } catch (e) {
+	      $('lookOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  $('startPat').addEventListener('click', async () => {
+	    $('patOut').textContent = '';
+	    try {
+	      const body = {
+	        pattern: $('pat').value,
+	        duration_s: parseFloat(($('dur').value || '30')),
+	        brightness: parseInt(($('bri').value || '128'), 10),
+	      };
+	      const fpsRaw = ($('fps').value || '').trim();
+	      if (fpsRaw) body.fps = parseFloat(fpsRaw);
+	      const dir = $('dir').value || '';
+	      if (dir) body.direction = dir;
+	      const pos = $('pos').value || '';
+	      if (pos) body.start_pos = pos;
+	      const scope = ($('patScope').value || 'local').trim();
+	      const targets = parseTargets(($('patTargets').value || '').trim());
+	      const path = (scope === 'fleet') ? '/v1/fleet/invoke' : '/v1/ddp/start';
+	      const payload = (scope === 'fleet') ? { action: 'start_ddp_pattern', params: body, targets, include_self: true } : body;
+	      const res = await api(path, { method: 'POST', body: payload });
+	      $('patOut').textContent = pretty(res);
+	      refresh();
+	    } catch (e) {
+	      $('patOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  $('stopPat').addEventListener('click', async () => {
+	    $('patOut').textContent = '';
+	    try {
+	      const scope = ($('patScope').value || 'local').trim();
+	      const targets = parseTargets(($('patTargets').value || '').trim());
+	      const path = (scope === 'fleet') ? '/v1/fleet/invoke' : '/v1/ddp/stop';
+	      const payload = (scope === 'fleet') ? { action: 'stop_ddp', params: {}, targets, include_self: true } : {};
+	      const res = await api(path, { method: 'POST', body: payload });
+	      $('patOut').textContent = pretty(res);
+	      refresh();
+	    } catch (e) {
+	      $('patOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  $('seqStart').addEventListener('click', async () => {
+	    $('seqOut').textContent = '';
+	    try {
+	      const file = $('seqFile').value || '';
+	      if (!file) throw new Error('Pick a sequence file');
+	      const loop = ($('seqLoop').value || 'false') === 'true';
+	      const targets = parseTargets(($('seqTargets').value || '').trim());
+	      const res = await api('/v1/fleet/sequences/start', { method: 'POST', body: { file, loop, targets, include_self: true } });
+	      $('seqOut').textContent = pretty(res);
+	      refresh();
+	    } catch (e) {
+	      $('seqOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  $('seqStop').addEventListener('click', async () => {
+	    $('seqOut').textContent = '';
+	    try {
+	      const res = await api('/v1/fleet/sequences/stop', { method: 'POST', body: {} });
+	      $('seqOut').textContent = pretty(res);
+	      refresh();
+	    } catch (e) {
+	      $('seqOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  $('stopAll').addEventListener('click', async () => {
+	    $('status').textContent = 'Stopping…';
+	    try {
+	      await api('/v1/fleet/stop_all', { method: 'POST', body: {} });
+	    } catch (e) {
+      $('status').textContent = 'Stop error: ' + e.message;
+    } finally {
+      refresh();
+    }
+  });
+
+  $('logout').addEventListener('click', async () => {
+    try { await api('/v1/auth/logout', { method: 'POST', body: {} }); } catch {}
+    window.location = '/ui';
+  });
+
+  $('chatSend').addEventListener('click', async () => {
+    $('chatOut').textContent = '';
+    try {
+      const text = ($('chatIn').value || '').trim();
+      if (!text) return;
+      const res = await api('/v1/command', { method: 'POST', body: { text } });
+      $('chatOut').textContent = pretty(res);
+      refresh();
+    } catch (e) {
+      $('chatOut').textContent = 'Error: ' + e.message;
+	    }
+	  });
+
+	  loadPatterns().then(loadSequences).then(refresh).then(whoami);
+	</script>
+	</body>
+	</html>
+	"""
+
+
+@app.get("/ui", include_in_schema=False)
+def ui(request: Request) -> HTMLResponse:
+    if not SETTINGS.ui_enabled:
+        raise HTTPException(status_code=404, detail="UI is disabled (set UI_ENABLED=true).")
+
+    if SETTINGS.auth_enabled:
+        msg = (request.query_params.get("msg") or "").strip()
+        tok = _jwt_from_request(request)
+        if tok:
+            try:
+                jwt_decode_hs256(tok, secret=str(SETTINGS.auth_jwt_secret or ""), issuer=str(SETTINGS.auth_jwt_issuer or ""))
+                return HTMLResponse(_ui_app_html())
+            except Exception:
+                pass
+        return HTMLResponse(_ui_login_html(message=msg))
+
+    return HTMLResponse(_ui_app_html())
+
+
+@app.get("/v1/health")
+def health() -> Dict[str, Any]:
+    return {"ok": True, "service": "wled-show-agent", "version": app.version}
+
+
+def _jwt_from_request(request: Request) -> str | None:
+    auth = request.headers.get("authorization") or ""
+    parts = auth.strip().split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        tok = parts[1].strip()
+        # Only treat Bearer values that look like a JWT as JWTs; this avoids
+        # conflicting with A2A keys or other non-JWT bearer tokens.
+        if tok and tok.count(".") == 2:
+            return tok
+    if SETTINGS.auth_cookie_name:
+        tok = request.cookies.get(SETTINGS.auth_cookie_name)
+        if tok:
+            return str(tok).strip()
+    return None
+
+
+def _require_jwt_auth(request: Request) -> Dict[str, Any]:
+    if not SETTINGS.auth_enabled:
+        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false; JWT auth is not configured.")
+    tok = _jwt_from_request(request)
+    if not tok:
+        raise HTTPException(status_code=401, detail="Missing token")
+    try:
+        claims = jwt_decode_hs256(
+            tok,
+            secret=str(SETTINGS.auth_jwt_secret or ""),
+            issuer=str(SETTINGS.auth_jwt_issuer or ""),
+        )
+        return {"subject": claims.subject, "expires_at": claims.expires_at, "issued_at": claims.issued_at, "claims": claims.raw}
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@app.post("/v1/auth/login")
+def auth_login(req: AuthLoginRequest, response: Response) -> Dict[str, Any]:
+    if not SETTINGS.auth_enabled:
+        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false; login is disabled.")
+    user = (req.username or "").strip()
+    if user != (SETTINGS.auth_username or "").strip():
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not verify_password(req.password, str(SETTINGS.auth_password or "")):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = jwt_encode_hs256(
+        {"sub": user, "role": "admin"},
+        secret=str(SETTINGS.auth_jwt_secret or ""),
+        ttl_s=int(SETTINGS.auth_jwt_ttl_s),
+        issuer=str(SETTINGS.auth_jwt_issuer or ""),
+    )
+
+    response.set_cookie(
+        key=str(SETTINGS.auth_cookie_name),
+        value=token,
+        httponly=True,
+        secure=bool(SETTINGS.auth_cookie_secure),
+        samesite="lax",
+        max_age=int(SETTINGS.auth_jwt_ttl_s),
+        path="/",
+    )
+    return {"ok": True, "user": {"username": user}, "token": token, "expires_in": int(SETTINGS.auth_jwt_ttl_s)}
+
+
+@app.post("/v1/auth/logout")
+def auth_logout(response: Response) -> Dict[str, Any]:
+    if SETTINGS.auth_cookie_name:
+        response.delete_cookie(key=str(SETTINGS.auth_cookie_name), path="/")
+    return {"ok": True}
+
+
+@app.get("/v1/auth/me")
+def auth_me(request: Request) -> Dict[str, Any]:
+    info = _require_jwt_auth(request)
+    return {"ok": True, "user": {"username": info["subject"]}, "expires_at": info["expires_at"]}
+
+
+@app.get("/v1/wled/info")
+def wled_info() -> Dict[str, Any]:
+    try:
+        info = WLED.get_info()
+        return {
+            "ok": True,
+            "info": info,
+            "segment_ids": SEGMENT_IDS,
+            "replicate_to_all_segments": SETTINGS.wled_replicate_to_all_segments,
+        }
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/v1/wled/state")
+def wled_state() -> Dict[str, Any]:
+    try:
+        st = WLED.get_state()
+        return {"ok": True, "state": st}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/v1/wled/segments")
+def wled_segments() -> Dict[str, Any]:
+    """Return the current segment list from WLED (useful when you have 2+ segments)."""
+    try:
+        segs = WLED.get_segments(refresh=True)
+        return {"ok": True, "segment_ids": SEGMENT_IDS, "segments": segs}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+
+@app.get("/v1/segments/layout")
+def segments_layout() -> Dict[str, Any]:
+    """Return inferred segment bounds + whether this looks like a 4-quadrant (quarters) layout."""
+    try:
+        from segment_layout import fetch_segment_layout
+        layout = fetch_segment_layout(WLED, segment_ids=SEGMENT_IDS, refresh=True)
+        return {
+            "ok": True,
+            "layout": {
+                "kind": layout.kind,
+                "led_count": layout.led_count,
+                "segments": [
+                    {"id": s.id, "start": s.start, "stop": s.stop, "len": s.length}
+                    for s in layout.segments
+                ],
+                "ordered_ids": layout.ordered_ids(),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/segments/orientation")
+def segments_orientation() -> Dict[str, Any]:
+    """Return a best-effort street-facing quadrant mapping (front/right/back/left).
+
+    This is mainly useful for 4-segment trees where each segment is a quarter (your 4 outputs).
+    """
+    ori = _get_orientation(refresh=True)
+    return {
+        "ok": True,
+        "configured": {
+            "quad_right_segment_id": SETTINGS.quad_right_segment_id,
+            "quad_order_from_street": SETTINGS.quad_order_from_street,
+            "quad_default_start_pos": SETTINGS.quad_default_start_pos,
+        },
+        "orientation": None
+        if ori is None
+        else {
+            "kind": ori.kind,
+            "ordered_segment_ids": ori.ordered_segment_ids,
+            "order_direction_from_street": ori.order_direction_from_street,
+            "right_segment_id": ori.right_segment_id,
+            "positions": ori.positions,
+            "notes": ori.notes,
+        },
+    }
+
+
+@app.post("/v1/wled/state")
+def wled_apply_state(req: ApplyStateRequest) -> Dict[str, Any]:
+    try:
+        # brightness safety
+        if "bri" in req.state:
+            req.state["bri"] = min(SETTINGS.wled_max_bri, max(1, int(req.state["bri"])))
+        COOLDOWN.wait()
+        out = WLED.apply_state(req.state, verbose=False)
+        return {"ok": True, "result": out}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/v1/ddp/patterns")
+def ddp_patterns() -> Dict[str, Any]:
+    from patterns import PatternFactory
+    try:
+        info = WLED.device_info()
+        from segment_layout import fetch_segment_layout
+        layout = None
+        try:
+            layout = fetch_segment_layout(WLED, segment_ids=SEGMENT_IDS, refresh=False)
+        except Exception:
+            layout = None
+        factory = PatternFactory(led_count=info.led_count, geometry=GEOM, segment_layout=layout)
+        return {"ok": True, "patterns": factory.available(), "geometry_enabled": GEOM.enabled_for(info.led_count)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/ddp/status")
+def ddp_status() -> Dict[str, Any]:
+    return {"ok": True, "status": DDP.status().__dict__}
+
+
+@app.post("/v1/ddp/start")
+def ddp_start(req: DDPStartRequest) -> Dict[str, Any]:
+    try:
+        # Merge top-level friendly controls into params for convenience
+        params = dict(req.params or {})
+        if req.direction and "direction" not in params:
+            params["direction"] = req.direction
+        if req.start_pos and "start_pos" not in params:
+            params["start_pos"] = req.start_pos
+
+        ori = _get_orientation(refresh=False)
+        params = prepare_ddp_params(
+            pattern=req.pattern,
+            params=params,
+            orientation=ori,
+            default_start_pos=str(SETTINGS.quad_default_start_pos),
+        )
+
+        st = DDP.start(
+            pattern=req.pattern,
+            params=params,
+            duration_s=req.duration_s,
+            brightness=min(SETTINGS.wled_max_bri, req.brightness),
+            fps=req.fps,
+        )
+        return {"ok": True, "status": st.__dict__}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/ddp/stop")
+def ddp_stop() -> Dict[str, Any]:
+    st = DDP.stop()
+    return {"ok": True, "status": st.__dict__}
+
+
+@app.post("/v1/looks/generate")
+def looks_generate(req: GenerateLooksRequest) -> Dict[str, Any]:
+    try:
+        summary = LOOKS.generate_pack(
+            total_looks=req.total_looks,
+            themes=req.themes,
+            brightness=min(SETTINGS.wled_max_bri, req.brightness),
+            seed=req.seed,
+            write_files=req.write_files,
+            include_multi_segment=req.include_multi_segment,
+        )
+        return {"ok": True, "summary": summary.__dict__}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/looks/packs")
+def looks_packs() -> Dict[str, Any]:
+    return {"ok": True, "packs": LOOKS.list_packs(), "latest": LOOKS.latest_pack()}
+
+
+@app.post("/v1/looks/apply_random")
+def looks_apply_random(req: ApplyRandomLookRequest) -> Dict[str, Any]:
+    try:
+        COOLDOWN.wait()
+        out = LOOKS.apply_random(theme=req.theme, pack_file=req.pack_file, brightness=req.brightness, seed=req.seed)
+        return {"ok": True, "result": out}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/presets/import_from_pack")
+def presets_import(req: ImportPresetsRequest) -> Dict[str, Any]:
+    try:
+        pack_path = os.path.join(SETTINGS.data_dir, "looks", req.pack_file)
+        res = IMPORTER.import_from_pack(
+            pack_path=pack_path,
+            start_id=req.start_id,
+            limit=req.limit,
+            name_prefix=req.name_prefix,
+            include_brightness=req.include_brightness,
+            save_bounds=req.save_bounds,
+        )
+        return {"ok": True, "result": res.__dict__}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/sequences/list")
+def sequences_list() -> Dict[str, Any]:
+    return {"ok": True, "files": SEQUENCES.list_sequences()}
+
+
+@app.post("/v1/sequences/generate")
+def sequences_generate(req: GenerateSequenceRequest) -> Dict[str, Any]:
+    try:
+        pack = req.pack_file or LOOKS.latest_pack()
+        if not pack:
+            raise RuntimeError("No looks pack found; generate looks first.")
+        pack_path = os.path.join(SETTINGS.data_dir, "looks", pack)
+        looks = read_jsonl(pack_path)
+        # keep a reasonable subset if file is huge
+        if len(looks) > 2000:
+            looks = looks[:2000]
+        ddp_pats = ddp_patterns()["patterns"]  # reuse
+        fname = SEQUENCES.generate(
+            name=req.name,
+            looks=looks,
+            duration_s=req.duration_s,
+            step_s=req.step_s,
+            include_ddp=req.include_ddp,
+            ddp_patterns=ddp_pats,
+            seed=req.seed,
+        )
+        return {"ok": True, "file": fname}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/sequences/status")
+def sequences_status() -> Dict[str, Any]:
+    return {"ok": True, "status": SEQUENCES.status().__dict__}
+
+
+@app.post("/v1/sequences/play")
+def sequences_play(req: PlaySequenceRequest) -> Dict[str, Any]:
+    try:
+        st = SEQUENCES.play(file=req.file, loop=req.loop)
+        return {"ok": True, "status": st.__dict__}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/sequences/stop")
+def sequences_stop() -> Dict[str, Any]:
+    st = SEQUENCES.stop()
+    return {"ok": True, "status": st.__dict__}
+
+
+@app.post("/v1/go_crazy")
+def go_crazy(req: GoCrazyRequest) -> Dict[str, Any]:
+    try:
+        # 1) generate looks pack
+        summary = LOOKS.generate_pack(
+            total_looks=req.total_looks,
+            themes=req.themes,
+            brightness=min(SETTINGS.wled_max_bri, req.brightness),
+            seed=req.seed,
+            write_files=req.write_files,
+            include_multi_segment=True,
+        )
+
+        results: Dict[str, Any] = {"looks_pack": summary.__dict__}
+
+        # 2) generate sequences
+        seq_files: List[str] = []
+        if req.sequences > 0:
+            pack_path = os.path.join(SETTINGS.data_dir, "looks", summary.file)
+            looks = read_jsonl(pack_path)
+            if len(looks) > 2000:
+                looks = looks[:2000]
+            ddp_pats = ddp_patterns()["patterns"]
+            for i in range(req.sequences):
+                fname = SEQUENCES.generate(
+                    name=f"{i+1:02d}_Mix",
+                    looks=looks,
+                    duration_s=req.sequence_duration_s,
+                    step_s=req.step_s,
+                    include_ddp=req.include_ddp,
+                    ddp_patterns=ddp_pats,
+                    seed=req.seed + i,
+                )
+                seq_files.append(fname)
+        results["sequences"] = seq_files
+
+        # 3) optional preset import
+        if req.import_presets:
+            pack_path = os.path.join(SETTINGS.data_dir, "looks", summary.file)
+            res = IMPORTER.import_from_pack(
+                pack_path=pack_path,
+                start_id=req.import_start_id,
+                limit=req.import_limit,
+                name_prefix="AI",
+                include_brightness=True,
+                save_bounds=True,
+            )
+            results["preset_import"] = res.__dict__
+
+        return {"ok": True, "result": results}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/command")
+def command(req: CommandRequest) -> Dict[str, Any]:
+    if DIRECTOR is None:
+        raise HTTPException(status_code=400, detail="OPENAI_API_KEY not configured; /v1/command is disabled.")
+    try:
+        return DIRECTOR.run(req.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ----------------------------
+# Falcon Player (FPP) integration (optional)
+# ----------------------------
+
+def _require_fpp() -> FPPClient:
+    if FPP is None:
+        raise HTTPException(status_code=400, detail="FPP integration not configured; set FPP_BASE_URL.")
+    return FPP
+
+
+def _resolve_data_path(rel_path: str) -> Path:
+    base = Path(SETTINGS.data_dir).resolve()
+    p = (base / (rel_path or "")).resolve()
+    if p == base:
+        return p
+    if base not in p.parents:
+        raise HTTPException(status_code=400, detail="Path must be within DATA_DIR.")
+    return p
+
+
+@app.get("/v1/fpp/status")
+def fpp_status(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    try:
+        return {"ok": True, "fpp": fpp.status().as_dict()}
+    except FPPError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/v1/fpp/playlists")
+def fpp_playlists(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    try:
+        return {"ok": True, "fpp": fpp.playlists().as_dict()}
+    except FPPError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/v1/fpp/playlist/start")
+def fpp_start_playlist(req: FPPStartPlaylistRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    try:
+        return {"ok": True, "fpp": fpp.start_playlist(req.name, repeat=req.repeat).as_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fpp/playlist/stop")
+def fpp_stop_playlist(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    try:
+        return {"ok": True, "fpp": fpp.stop_playlist().as_dict()}
+    except FPPError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/v1/fpp/event/trigger")
+def fpp_trigger_event(req: FPPTriggerEventRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    try:
+        return {"ok": True, "fpp": fpp.trigger_event(req.event_id).as_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fpp/request")
+def fpp_proxy(req: FPPProxyRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    fpp = _require_fpp()
+    method = (req.method or "GET").strip().upper()
+    if method not in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+        raise HTTPException(status_code=400, detail="Unsupported method; use GET/POST/PUT/DELETE/PATCH.")
+    try:
+        resp = fpp.request(method, req.path, params=dict(req.params or {}), json_body=req.json_body)
+        return {"ok": True, "fpp": resp.as_dict()}
+    except FPPError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# ----------------------------
+# Show config + xLights import (optional helpers)
+# ----------------------------
+
+@app.post("/v1/show/config/load")
+def show_config_load(req: ShowConfigLoadRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    try:
+        cfg = load_show_config(data_dir=SETTINGS.data_dir, rel_path=req.file)
+        return {"ok": True, "config": cfg.as_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/xlights/import_networks")
+def xlights_import_networks(req: XlightsImportNetworksRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    try:
+        networks_path = _resolve_data_path(req.networks_file)
+        controllers = import_xlights_networks_file(str(networks_path))
+        cfg = show_config_from_xlights_networks(
+            networks=controllers,
+            show_name=req.show_name,
+            subnet=req.subnet,
+            coordinator_base_url=req.coordinator_base_url,
+            fpp_base_url=req.fpp_base_url,
+        )
+        out_path = write_show_config(data_dir=SETTINGS.data_dir, rel_path=req.out_file, config=cfg)
+        return {
+            "ok": True,
+            "controllers": [
+                {
+                    "name": c.name,
+                    "host": c.host,
+                    "protocol": c.protocol,
+                    "universe_start": c.universe_start,
+                    "pixel_count": c.pixel_count,
+                }
+                for c in controllers
+            ],
+            "show_config_file": out_path,
+            "show_config": cfg.as_dict(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ----------------------------
+# Export FPP helper scripts (FPP -> Agent triggers)
+# ----------------------------
+
+@app.post("/v1/fpp/export/fleet_sequence_start_script")
+def export_fleet_sequence_start_script(
+    req: FPPExportFleetSequenceScriptRequest, _: None = Depends(_require_a2a_auth)
+) -> Dict[str, Any]:
+    coord = (req.coordinator_base_url or "").strip()
+    if (not coord) and req.show_config_file:
+        cfg = load_show_config(data_dir=SETTINGS.data_dir, rel_path=req.show_config_file)
+        coord = (cfg.coordinator.base_url or "").strip()
+    if not coord:
+        raise HTTPException(status_code=400, detail="Provide coordinator_base_url or show_config_file with coordinator.base_url.")
+
+    payload: Dict[str, Any] = {
+        "file": req.sequence_file,
+        "loop": bool(req.loop),
+        "targets": req.targets,
+        "include_self": bool(req.include_self),
+    }
+    script = render_http_post_script(
+        coordinator_base_url=coord,
+        path="/v1/fleet/sequences/start",
+        payload=payload,
+        a2a_api_key=SETTINGS.a2a_api_key if req.include_a2a_key else None,
+    )
+
+    out_dir = str(_resolve_data_path("fpp/scripts"))
+    res = write_script(out_dir=out_dir, filename=req.out_filename, script_text=script)
+    return {"ok": True, "script": {"file": res.filename, "path": res.rel_path, "bytes": res.bytes_written}}
+
+
+@app.post("/v1/fpp/export/fleet_stop_all_script")
+def export_fleet_stop_all_script(
+    req: FPPExportFleetStopAllScriptRequest, _: None = Depends(_require_a2a_auth)
+) -> Dict[str, Any]:
+    coord = (req.coordinator_base_url or "").strip()
+    if (not coord) and req.show_config_file:
+        cfg = load_show_config(data_dir=SETTINGS.data_dir, rel_path=req.show_config_file)
+        coord = (cfg.coordinator.base_url or "").strip()
+    if not coord:
+        raise HTTPException(status_code=400, detail="Provide coordinator_base_url or show_config_file with coordinator.base_url.")
+
+    payload: Dict[str, Any] = {"targets": req.targets, "include_self": bool(req.include_self)}
+    script = render_http_post_script(
+        coordinator_base_url=coord,
+        path="/v1/fleet/stop_all",
+        payload=payload,
+        a2a_api_key=SETTINGS.a2a_api_key if req.include_a2a_key else None,
+    )
+
+    out_dir = str(_resolve_data_path("fpp/scripts"))
+    res = write_script(out_dir=out_dir, filename=req.out_filename, script_text=script)
+    return {"ok": True, "script": {"file": res.filename, "path": res.rel_path, "bytes": res.bytes_written}}
+
+
+# ----------------------------
+# A2A (Agent-to-Agent) protocol
+# ----------------------------
+
+def _a2a_action_pick_random_look_spec(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    pack, row = LOOKS.choose_random(
+        theme=kwargs.get("theme"),
+        pack_file=kwargs.get("pack_file"),
+        seed=kwargs.get("seed"),
+    )
+    return {"pack_file": pack, "look_spec": row}
+
+
+def _a2a_action_apply_look_spec(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    look_spec = kwargs.get("look_spec") or kwargs.get("look") or kwargs.get("state") or {}
+    if not isinstance(look_spec, dict):
+        raise ValueError("look_spec must be an object")
+    bri = kwargs.get("brightness")
+    if bri is None:
+        bri = kwargs.get("brightness_override")
+    bri_i: Optional[int] = None
+    if bri is not None:
+        bri_i = min(SETTINGS.wled_max_bri, max(1, int(bri)))
+    COOLDOWN.wait()
+    return LOOKS.apply_look(look_spec, brightness_override=bri_i)
+
+
+def _a2a_action_apply_state(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    state = kwargs.get("state") or {}
+    if not isinstance(state, dict):
+        raise ValueError("state must be an object")
+    if "bri" in state:
+        state["bri"] = min(SETTINGS.wled_max_bri, max(1, int(state["bri"])))
+    COOLDOWN.wait()
+    out = WLED.apply_state(state, verbose=False)
+    return {"result": out}
+
+
+def _a2a_action_start_ddp(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    params = dict(kwargs.get("params") or {})
+    if kwargs.get("direction") and "direction" not in params:
+        params["direction"] = kwargs.get("direction")
+    if kwargs.get("start_pos") and "start_pos" not in params:
+        params["start_pos"] = kwargs.get("start_pos")
+
+    ori = _get_orientation(refresh=False)
+    params = prepare_ddp_params(
+        pattern=str(kwargs.get("pattern")),
+        params=params,
+        orientation=ori,
+        default_start_pos=str(SETTINGS.quad_default_start_pos),
+    )
+
+    st = DDP.start(
+        pattern=str(kwargs.get("pattern")),
+        params=params,
+        duration_s=float(kwargs.get("duration_s", 30.0)),
+        brightness=min(SETTINGS.wled_max_bri, int(kwargs.get("brightness", 128))),
+        fps=float(kwargs.get("fps", SETTINGS.ddp_fps_default)),
+    )
+    return {"status": st.__dict__}
+
+
+def _a2a_action_stop_ddp(_: Dict[str, Any]) -> Dict[str, Any]:
+    return {"status": DDP.stop().__dict__}
+
+
+def _a2a_action_stop_all(_: Dict[str, Any]) -> Dict[str, Any]:
+    # sequences.stop() best-effort stops DDP too.
+    st = SEQUENCES.stop()
+    fleet_st = None
+    try:
+        if FLEET_SEQUENCES is not None:
+            fleet_st = FLEET_SEQUENCES.stop().__dict__
+    except Exception:
+        fleet_st = None
+    return {"sequence": st.__dict__, "fleet_sequence": fleet_st, "ddp": DDP.status().__dict__}
+
+
+def _a2a_action_status(_: Dict[str, Any]) -> Dict[str, Any]:
+    fleet_st = None
+    try:
+        if FLEET_SEQUENCES is not None:
+            fleet_st = FLEET_SEQUENCES.status().__dict__
+    except Exception:
+        fleet_st = None
+    return {"sequence": SEQUENCES.status().__dict__, "fleet_sequence": fleet_st, "ddp": DDP.status().__dict__}
+
+
+_A2A_ACTIONS: Dict[str, Any] = {
+    "pick_random_look_spec": _a2a_action_pick_random_look_spec,
+    "apply_look_spec": _a2a_action_apply_look_spec,
+    "apply_state": _a2a_action_apply_state,
+    "start_ddp_pattern": _a2a_action_start_ddp,
+    "stop_ddp": _a2a_action_stop_ddp,
+    "stop_all": _a2a_action_stop_all,
+    "status": _a2a_action_status,
+}
+
+_A2A_CAPABILITIES: List[Dict[str, Any]] = [
+    {
+        "action": "pick_random_look_spec",
+        "description": "Choose a look spec from a local pack without applying it.",
+        "params": {"theme": "optional string", "pack_file": "optional string", "seed": "optional int"},
+    },
+    {
+        "action": "apply_look_spec",
+        "description": "Apply a look spec (effect/palette by name) to this WLED device.",
+        "params": {"look_spec": "object", "brightness_override": "optional int"},
+    },
+    {
+        "action": "apply_state",
+        "description": "Apply a raw WLED /json/state payload (brightness capped).",
+        "params": {"state": "object"},
+    },
+    {
+        "action": "start_ddp_pattern",
+        "description": "Start a realtime DDP pattern for a duration.",
+        "params": {
+            "pattern": "string",
+            "params": "object",
+            "duration_s": "optional number",
+            "brightness": "optional int",
+            "fps": "optional number",
+            "direction": "optional 'cw'|'ccw'",
+            "start_pos": "optional 'front'|'right'|'back'|'left'",
+        },
+    },
+    {"action": "stop_ddp", "description": "Stop any running DDP stream.", "params": {}},
+    {"action": "stop_all", "description": "Stop sequences and DDP.", "params": {}},
+    {"action": "status", "description": "Get sequence + DDP status.", "params": {}},
+]
+
+
+@app.get("/v1/a2a/card")
+def a2a_card(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "agent": {
+            "id": SETTINGS.agent_id,
+            "name": SETTINGS.agent_name,
+            "role": SETTINGS.agent_role,
+            "version": app.version,
+            "endpoints": {"card": "/v1/a2a/card", "invoke": "/v1/a2a/invoke"},
+            "wled": {
+                "url": SETTINGS.wled_tree_url,
+                "segment_ids": SEGMENT_IDS,
+                "replicate_to_all_segments": SETTINGS.wled_replicate_to_all_segments,
+            },
+            "capabilities": _A2A_CAPABILITIES,
+        },
+    }
+
+
+@app.post("/v1/a2a/invoke")
+def a2a_invoke(req: A2AInvokeRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    action = (req.action or "").strip()
+    fn = _A2A_ACTIONS.get(action)
+    if fn is None:
+        return {"ok": False, "request_id": req.request_id, "error": f"Unknown action '{action}'"}
+    try:
+        res = fn(dict(req.params or {}))
+        return {"ok": True, "request_id": req.request_id, "action": action, "result": res}
+    except Exception as e:
+        return {"ok": False, "request_id": req.request_id, "action": action, "error": str(e)}
+
+
+# ----------------------------
+# Fleet orchestration (optional)
+# ----------------------------
+
+def _peer_headers() -> Dict[str, str]:
+    if not SETTINGS.a2a_api_key:
+        return {}
+    return {"X-A2A-Key": SETTINGS.a2a_api_key}
+
+
+def _peer_post(peer: A2APeer, path: str, payload: Dict[str, Any], *, timeout_s: float) -> Dict[str, Any]:
+    url = peer.base_url.rstrip("/") + path
+    resp = requests.post(url, json=payload, headers=_peer_headers(), timeout=timeout_s)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"ok": False, "error": resp.text[:300]}
+    if resp.status_code >= 400 and isinstance(body, dict) and body.get("ok") is not False:
+        body = {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+    return body if isinstance(body, dict) else {"ok": False, "error": "Non-object response"}
+
+def _peer_get(peer: A2APeer, path: str, *, timeout_s: float) -> Dict[str, Any]:
+    url = peer.base_url.rstrip("/") + path
+    resp = requests.get(url, headers=_peer_headers(), timeout=timeout_s)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"ok": False, "error": resp.text[:300]}
+    if resp.status_code >= 400 and isinstance(body, dict) and body.get("ok") is not False:
+        body = {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+    return body if isinstance(body, dict) else {"ok": False, "error": "Non-object response"}
+
+
+def _peer_supported_actions(peer: A2APeer, *, timeout_s: float) -> set[str]:
+    card = _peer_get(peer, "/v1/a2a/card", timeout_s=timeout_s)
+    if not isinstance(card, dict) or card.get("ok") is not True:
+        return set()
+    agent = card.get("agent") or {}
+    caps = agent.get("capabilities") or []
+    actions: set[str] = set()
+    if isinstance(caps, list):
+        for c in caps:
+            if isinstance(c, dict) and "action" in c:
+                actions.add(str(c.get("action")))
+            elif isinstance(c, str):
+                actions.add(c)
+    return actions
+
+
+def _select_peers(targets: Optional[List[str]]) -> List[A2APeer]:
+    if not PEERS:
+        return []
+    if not targets:
+        return list(PEERS.values())
+    out: List[A2APeer] = []
+    for t in targets:
+        if t in PEERS:
+            out.append(PEERS[t])
+    return out
+
+
+def _fleet_local_invoke(action: str, params: Dict[str, Any]) -> Any:
+    fn = _A2A_ACTIONS.get(action)
+    if fn is None:
+        raise RuntimeError(f"Unknown local action '{action}'")
+    return fn(dict(params or {}))
+
+
+def _fleet_peer_invoke(peer: A2APeer, action: str, params: Dict[str, Any], timeout_s: float) -> Dict[str, Any]:
+    payload = {"action": action, "params": dict(params or {})}
+    return _peer_post(peer, "/v1/a2a/invoke", payload, timeout_s=float(timeout_s))
+
+
+# Run sequences across the whole fleet (coordinator use-case; safe when PEERS is empty too).
+FLEET_SEQUENCES = FleetSequenceService(
+    data_dir=SETTINGS.data_dir,
+    peers=PEERS,
+    local_invoke=_fleet_local_invoke,
+    peer_invoke=_fleet_peer_invoke,
+    peer_supported_actions=_peer_supported_actions,
+    default_timeout_s=float(SETTINGS.a2a_http_timeout_s),
+)
+
+
+@app.get("/v1/fleet/peers")
+def fleet_peers(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "self": {"id": SETTINGS.agent_id, "name": SETTINGS.agent_name, "role": SETTINGS.agent_role},
+        "peers": [{"name": p.name, "base_url": p.base_url} for p in PEERS.values()],
+    }
+
+
+@app.post("/v1/fleet/invoke")
+def fleet_invoke(req: FleetInvokeRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    action = (req.action or "").strip()
+    timeout_s = float(req.timeout_s) if req.timeout_s is not None else float(SETTINGS.a2a_http_timeout_s)
+    peers = _select_peers(req.targets)
+
+    results: Dict[str, Any] = {}
+    if req.include_self:
+        local = _A2A_ACTIONS.get(action)
+        if local is None:
+            results["self"] = {"ok": False, "error": f"Unknown action '{action}'"}
+        else:
+            try:
+                results["self"] = {"ok": True, "result": local(dict(req.params or {}))}
+            except Exception as e:
+                results["self"] = {"ok": False, "error": str(e)}
+
+    if peers:
+        payload = {"action": action, "params": dict(req.params or {})}
+        with ThreadPoolExecutor(max_workers=min(8, len(peers))) as ex:
+            futs = {ex.submit(_peer_post, peer, "/v1/a2a/invoke", payload, timeout_s=timeout_s): peer for peer in peers}
+            for fut in as_completed(futs):
+                peer = futs[fut]
+                try:
+                    results[peer.name] = fut.result()
+                except Exception as e:
+                    results[peer.name] = {"ok": False, "error": str(e)}
+
+    return {"ok": True, "action": action, "results": results}
+
+
+@app.post("/v1/fleet/apply_random_look")
+def fleet_apply_random_look(req: FleetApplyRandomLookRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    # Pick on this agent, then broadcast the same look_spec to peers so devices match.
+    pack, row = LOOKS.choose_random(theme=req.theme, pack_file=req.pack_file, seed=req.seed)
+    bri = min(SETTINGS.wled_max_bri, req.brightness) if req.brightness is not None else None
+
+    results: Dict[str, Any] = {"pack_file": pack, "picked": {"id": row.get("id"), "name": row.get("name"), "theme": row.get("theme")}}
+
+    peers = _select_peers(req.targets)
+    timeout_s = float(SETTINGS.a2a_http_timeout_s)
+
+    if req.include_self:
+        try:
+            COOLDOWN.wait()
+            results["self"] = {"ok": True, "result": LOOKS.apply_look(row, brightness_override=bri)}
+        except Exception as e:
+            results["self"] = {"ok": False, "error": str(e)}
+
+    if peers:
+        eligible: List[A2APeer] = []
+        for peer in peers:
+            actions = _peer_supported_actions(peer, timeout_s=timeout_s)
+            if "apply_look_spec" in actions:
+                eligible.append(peer)
+            else:
+                results[peer.name] = {"ok": False, "skipped": True, "reason": "Peer does not support apply_look_spec"}
+
+        if eligible:
+            payload = {"action": "apply_look_spec", "params": {"look_spec": row, "brightness_override": bri}}
+            with ThreadPoolExecutor(max_workers=min(8, len(eligible))) as ex:
+                futs = {ex.submit(_peer_post, peer, "/v1/a2a/invoke", payload, timeout_s=timeout_s): peer for peer in eligible}
+                for fut in as_completed(futs):
+                    peer = futs[fut]
+                    try:
+                        results[peer.name] = fut.result()
+                    except Exception as e:
+                        results[peer.name] = {"ok": False, "error": str(e)}
+
+    return {"ok": True, "result": results}
+
+
+@app.post("/v1/fleet/stop_all")
+def fleet_stop_all(req: FleetStopAllRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    timeout_s = float(req.timeout_s) if req.timeout_s is not None else float(SETTINGS.a2a_http_timeout_s)
+    peers = _select_peers(req.targets)
+    results: Dict[str, Any] = {}
+
+    if req.include_self:
+        try:
+            results["self"] = {"ok": True, "result": _a2a_action_stop_all({})}
+        except Exception as e:
+            results["self"] = {"ok": False, "error": str(e)}
+
+    if peers:
+        payload = {"action": "stop_all", "params": {}}
+        with ThreadPoolExecutor(max_workers=min(8, len(peers))) as ex:
+            futs = {ex.submit(_peer_post, peer, "/v1/a2a/invoke", payload, timeout_s=timeout_s): peer for peer in peers}
+            for fut in as_completed(futs):
+                peer = futs[fut]
+                try:
+                    results[peer.name] = fut.result()
+                except Exception as e:
+                    results[peer.name] = {"ok": False, "error": str(e)}
+
+    return {"ok": True, "action": "stop_all", "results": results}
+
+
+@app.get("/v1/fleet/sequences/status")
+def fleet_sequences_status(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    if FLEET_SEQUENCES is None:
+        raise HTTPException(status_code=500, detail="Fleet sequence service not initialized.")
+    return {"ok": True, "status": FLEET_SEQUENCES.status().__dict__}
+
+
+@app.post("/v1/fleet/sequences/start")
+def fleet_sequences_start(req: FleetSequenceStartRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    if FLEET_SEQUENCES is None:
+        raise HTTPException(status_code=500, detail="Fleet sequence service not initialized.")
+    try:
+        st = FLEET_SEQUENCES.start(
+            file=req.file,
+            loop=req.loop,
+            targets=req.targets,
+            include_self=req.include_self,
+            timeout_s=req.timeout_s,
+        )
+        return {"ok": True, "status": st.__dict__}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fleet/sequences/stop")
+def fleet_sequences_stop(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+    if FLEET_SEQUENCES is None:
+        raise HTTPException(status_code=500, detail="Fleet sequence service not initialized.")
+    st = FLEET_SEQUENCES.stop()
+    return {"ok": True, "status": st.__dict__}

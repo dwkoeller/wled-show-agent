@@ -1,0 +1,51 @@
+services:
+  tree:
+    build: ./agent
+    ports:
+      - "8088:8088"
+    env_file:
+      - .env.tree
+    volumes:
+      - ./data/tree:/data
+    restart: unless-stopped
+
+  roofline1:
+    build: ./agent
+    ports:
+      - "8089:8088"
+    env_file:
+      - .env.roofline1
+    volumes:
+      - ./data/roofline1:/data
+    restart: unless-stopped
+
+  roofline2:
+    build: ./agent
+    ports:
+      - "8090:8088"
+    env_file:
+      - .env.roofline2
+    volumes:
+      - ./data/roofline2:/data
+    restart: unless-stopped
+
+  star_wled:
+    build: ./agent
+    ports:
+      - "8091:8088"
+    env_file:
+      - .env.star_wled
+    volumes:
+      - ./data/star_wled:/data
+    restart: unless-stopped
+
+  star_esps:
+    build: ./agent
+    ports:
+      - "8092:8088"
+    env_file:
+      - .env.star_esps
+    command: ["uvicorn", "pixel_main:app", "--host", "0.0.0.0", "--port", "8088"]
+    volumes:
+      - ./data/star_esps:/data
+    restart: unless-stopped

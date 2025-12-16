@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import quote
+
+import requests
+
+
+class FPPError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class FPPResponse:
+    status_code: int
+    body: Any
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"status_code": self.status_code, "body": self.body}
+
+
+def _clean_base_url(base_url: str) -> str:
+    url = (base_url or "").strip()
+    if not url:
+        return ""
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = "http://" + url
+    return url.rstrip("/")
+
+
+class FPPClient:
+    """
+    Minimal Falcon Player (FPP) HTTP client.
+
+    FPP has multiple API styles across versions; this client provides:
+    - request(): raw path calls
+    - convenience methods that try a small set of common endpoints
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_s: float = 2.5,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.base_url = _clean_base_url(base_url)
+        if not self.base_url:
+            raise ValueError("FPP base_url is required")
+        self.timeout_s = max(0.5, float(timeout_s))
+        self.headers = dict(headers or {})
+
+    def _url(self, path: str) -> str:
+        p = (path or "").strip()
+        if not p.startswith("/"):
+            p = "/" + p
+        return self.base_url + p
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Any = None,
+        data: Any = None,
+        files: Any = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> FPPResponse:
+        url = self._url(path)
+        hdrs: Dict[str, str] = dict(self.headers)
+        if headers:
+            hdrs.update({str(k): str(v) for k, v in headers.items() if v is not None})
+
+        try:
+            resp = requests.request(
+                method=str(method).upper(),
+                url=url,
+                params=params,
+                json=json_body,
+                data=data,
+                files=files,
+                headers=hdrs,
+                timeout=self.timeout_s,
+            )
+        except Exception as e:
+            raise FPPError(f"FPP request failed: {e}")
+
+        body: Any
+        try:
+            body = resp.json()
+        except Exception:
+            body = (resp.text or "").strip()
+
+        if resp.status_code >= 400:
+            snippet = body if isinstance(body, str) else str(body)[:300]
+            raise FPPError(f"FPP HTTP {resp.status_code} for {path}: {snippet}")
+
+        return FPPResponse(status_code=int(resp.status_code), body=body)
+
+    def _try(self, attempts: Iterable[Tuple[str, str]], *, params: Optional[Dict[str, Any]] = None, json_body: Any = None) -> FPPResponse:
+        errors: List[str] = []
+        last: Optional[Exception] = None
+        for method, path in attempts:
+            try:
+                return self.request(method, path, params=params, json_body=json_body)
+            except Exception as e:
+                last = e
+                errors.append(str(e))
+                continue
+        if last is not None:
+            raise FPPError(errors[-1])
+        raise FPPError("No attempts provided")
+
+    def status(self) -> FPPResponse:
+        return self._try(
+            [
+                ("GET", "/api/fppd/status"),
+                ("GET", "/api/status"),
+                ("GET", "/api/system/status"),
+            ]
+        )
+
+    def playlists(self) -> FPPResponse:
+        return self._try(
+            [
+                ("GET", "/api/playlists"),
+                ("GET", "/api/playlist"),
+            ]
+        )
+
+    def start_playlist(self, name: str, *, repeat: bool = False) -> FPPResponse:
+        n = quote((name or "").strip())
+        if not n:
+            raise ValueError("playlist name is required")
+        params = {"repeat": 1 if repeat else 0}
+        return self._try(
+            [
+                ("GET", f"/api/playlist/{n}/start"),
+                ("POST", f"/api/playlist/{n}/start"),
+                ("GET", f"/api/playlists/{n}/start"),
+                ("POST", f"/api/playlists/{n}/start"),
+            ],
+            params=params,
+        )
+
+    def stop_playlist(self) -> FPPResponse:
+        return self._try(
+            [
+                ("GET", "/api/playlist/stop"),
+                ("POST", "/api/playlist/stop"),
+                ("GET", "/api/playlists/stop"),
+                ("POST", "/api/playlists/stop"),
+            ]
+        )
+
+    def trigger_event(self, event_id: int) -> FPPResponse:
+        eid = int(event_id)
+        if eid <= 0:
+            raise ValueError("event_id must be > 0")
+
+        # Common URL patterns seen in the wild; FPP versions vary.
+        return self._try(
+            [
+                ("GET", f"/api/event/{eid}/trigger"),
+                ("POST", f"/api/event/{eid}/trigger"),
+                ("GET", f"/api/event/trigger/{eid}"),
+                ("POST", f"/api/event/trigger/{eid}"),
+                ("GET", f"/api/trigger/event/{eid}"),
+                ("POST", f"/api/trigger/event/{eid}"),
+            ]
+        )
+

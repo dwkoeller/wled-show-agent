@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "name": "mega-tree-show",
+  "subnet": "172.16.200.0/24",
+  "coordinator": {
+    "base_url": "http://172.16.200.10:8088"
+  },
+  "fpp": {
+    "base_url": "http://172.16.200.20"
+  },
+  "props": [
+    {
+      "id": "tree",
+      "kind": "wled",
+      "name": "Mega Tree",
+      "wled_url": "http://172.16.200.50",
+      "segment_ids": [0, 1, 2, 3],
+      "tags": ["tree", "wled"]
+    },
+    {
+      "id": "roofline1",
+      "kind": "wled",
+      "name": "Roofline 1st Floor",
+      "wled_url": "http://172.16.200.51",
+      "tags": ["roofline", "wled"]
+    },
+    {
+      "id": "roofline2",
+      "kind": "wled",
+      "name": "Roofline 2nd Floor",
+      "wled_url": "http://172.16.200.52",
+      "tags": ["roofline", "wled"]
+    },
+    {
+      "id": "star_wled",
+      "kind": "wled",
+      "name": "Star (WLED)",
+      "wled_url": "http://172.16.200.53",
+      "tags": ["star", "wled"]
+    },
+    {
+      "id": "star_esps",
+      "kind": "pixel",
+      "name": "Star (ESPixelStick)",
+      "pixel": {
+        "protocol": "e131",
+        "host": "172.16.200.60",
+        "pixel_count": 0,
+        "universe_start": 1,
+        "channels_per_universe": 510
+      },
+      "tags": ["star", "pixel"]
+    }
+  ],
+  "groups": {
+    "wled": ["tree", "roofline1", "roofline2", "star_wled"],
+    "pixel": ["star_esps"],
+    "all": ["tree", "roofline1", "roofline2", "star_wled", "star_esps"]
+  }
+}
