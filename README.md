@@ -1,4 +1,4 @@
-# Christmas Show Agent v3.4
+# Christmas Show Agent v0.4
 
 Local-first **show director + pattern/sequence generator** for a WLED mega tree.
 
