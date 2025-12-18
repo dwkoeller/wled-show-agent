@@ -205,7 +205,8 @@ If you want the agent to control Falcon Player (playlist start/stop, event trigg
 ### Database (optional)
 
 - `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). When set, job history + small UI state (scheduler config and `runtime_state`) are also persisted in SQL.
-- With the included MySQL container: run `docker compose --profile db up -d --build` and set `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa` (the API will prefer async `aiomysql` and fall back to sync `pymysql` if needed).
+- With the included MySQL container: run `docker compose --profile db up -d --build` and set `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa`.
+- Retention (SQL only): `JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`.
 
 ### AI capability + cost (estimates)
 
@@ -249,6 +250,7 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 ### Status / diagnostics
 
 - `GET /v1/health`
+- `GET /readyz` – readiness checks (WLED + DB)
 - `GET /v1/wled/info`
 - `GET /v1/wled/state`
 - `GET /v1/wled/segments`
@@ -351,10 +353,20 @@ Basic show-window automation (UI: Tools → Scheduler):
 - `POST /v1/scheduler/stop`
 - `POST /v1/scheduler/run_once`
 
+### Metadata (SQL only)
+
+UI-facing metadata backed by SQL (when `DATABASE_URL` is set):
+
+- `GET /v1/meta/packs`
+- `GET /v1/meta/sequences`
+- `GET /v1/meta/audio_analyses`
+- `GET /v1/meta/last_applied`
+
 ### Metrics
 
 - `GET /v1/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
 - `GET /metrics` – Prometheus exposition format
+  - When `AUTH_ENABLED=true`: set `METRICS_PUBLIC=true` or configure `METRICS_SCRAPE_TOKEN` + `METRICS_SCRAPE_HEADER`.
 
 ---
 

@@ -150,3 +150,85 @@ def metrics_endpoint() -> PlainTextResponse:
         REGISTRY.render(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
+    """
+    Prometheus exposition that includes request metrics plus basic scheduler/job gauges.
+    """
+    lines: list[str] = [REGISTRY.render().rstrip("\n")]
+
+    st = getattr(request.app.state, "wsa", None)
+    if st is not None:
+        # DB configured?
+        lines.append("# HELP wsa_db_enabled Whether DATABASE_URL is configured.")
+        lines.append("# TYPE wsa_db_enabled gauge")
+        lines.append(
+            f"wsa_db_enabled {1 if getattr(st, 'db', None) is not None else 0}"
+        )
+
+        # Jobs (in-memory) by status.
+        jobs = getattr(st, "jobs", None)
+        if jobs is not None and hasattr(jobs, "status_counts"):
+            try:
+                counts = jobs.status_counts()
+            except Exception:
+                counts = {}
+            lines.append("# HELP wsa_jobs_status_total In-memory jobs by status.")
+            lines.append("# TYPE wsa_jobs_status_total gauge")
+            for status, count in sorted(counts.items()):
+                s = str(status).replace('"', '\\"')
+                lines.append(f'wsa_jobs_status_total{{status="{s}"}} {int(count)}')
+
+        # Scheduler status.
+        sched = getattr(st, "scheduler", None)
+        if sched is not None and hasattr(sched, "status"):
+            try:
+                sst = sched.status()
+            except Exception:
+                sst = None
+            if isinstance(sst, dict):
+                running = 1 if bool(sst.get("running")) else 0
+                in_window = 1 if bool(sst.get("in_window")) else 0
+                last_action_at = sst.get("last_action_at")
+                last_error = sst.get("last_error")
+
+                lines.append(
+                    "# HELP wsa_scheduler_running Whether scheduler thread is running."
+                )
+                lines.append("# TYPE wsa_scheduler_running gauge")
+                lines.append(f"wsa_scheduler_running {running}")
+
+                lines.append(
+                    "# HELP wsa_scheduler_in_window Whether current time is within the configured window."
+                )
+                lines.append("# TYPE wsa_scheduler_in_window gauge")
+                lines.append(f"wsa_scheduler_in_window {in_window}")
+
+                if last_action_at is not None:
+                    try:
+                        ts = float(last_action_at)
+                    except Exception:
+                        ts = None
+                    if ts is not None:
+                        lines.append(
+                            "# HELP wsa_scheduler_last_action_timestamp_seconds Last scheduler action time."
+                        )
+                        lines.append(
+                            "# TYPE wsa_scheduler_last_action_timestamp_seconds gauge"
+                        )
+                        lines.append(
+                            f"wsa_scheduler_last_action_timestamp_seconds {ts:.3f}"
+                        )
+
+                lines.append(
+                    "# HELP wsa_scheduler_last_error Whether the scheduler has a last_error set."
+                )
+                lines.append("# TYPE wsa_scheduler_last_error gauge")
+                lines.append(f"wsa_scheduler_last_error {1 if last_error else 0}")
+
+    body = "\n".join(lines).rstrip("\n") + "\n"
+    return PlainTextResponse(
+        body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

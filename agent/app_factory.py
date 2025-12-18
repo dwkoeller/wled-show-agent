@@ -19,6 +19,7 @@ from routes import (
     fseq,
     jobs,
     looks,
+    meta,
     metrics,
     misc,
     packs,
@@ -32,6 +33,7 @@ from routes import (
     show,
     wled,
 )
+from services.auth_service import auth_middleware
 from services import app_state
 from services.prometheus_metrics import PrometheusMetricsMiddleware
 from utils.request_id import RequestIdMiddleware
@@ -64,11 +66,11 @@ def _as_csv(val: str | None) -> list[str]:
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     # Start/stop background services. Keep best-effort so shutdown never hangs.
     try:
-        app_state.startup(app)
+        await app_state.startup(app)
         yield
     finally:
         try:
-            app_state.shutdown()
+            await app_state.shutdown(app)
         except Exception:
             pass
 
@@ -100,8 +102,8 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
-    # Auth middleware is optional (AUTH_ENABLED); app_state implements the policy.
-    app.middleware("http")(app_state._auth_middleware)
+    # Auth middleware is optional (AUTH_ENABLED).
+    app.middleware("http")(auth_middleware)
 
     app.include_router(root.router)
     app.include_router(auth.router)
@@ -123,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(files.router)
     app.include_router(runtime_state.router)
     app.include_router(scheduler.router)
+    app.include_router(meta.router)
     app.include_router(metrics.router)
     app.include_router(prometheus.router)
     app.include_router(jobs.router)

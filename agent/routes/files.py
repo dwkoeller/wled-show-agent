@@ -2,19 +2,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from services import app_state
+from services import files_service
 from utils.fastapi_utils import asyncify
 
 
 router = APIRouter()
 
-router.add_api_route("/v1/files/list", asyncify(app_state.files_list), methods=["GET"])
 router.add_api_route(
-    "/v1/files/download", asyncify(app_state.files_download), methods=["GET"]
+    "/v1/files/list", asyncify(files_service.files_list), methods=["GET"]
 )
 router.add_api_route(
-    "/v1/files/upload", asyncify(app_state.files_upload), methods=["PUT"]
+    "/v1/files/download", asyncify(files_service.files_download), methods=["GET"]
 )
 router.add_api_route(
-    "/v1/files/delete", asyncify(app_state.files_delete), methods=["DELETE"]
+    "/v1/files/upload", asyncify(files_service.files_upload), methods=["PUT"]
+)
+router.add_api_route(
+    "/v1/files/delete", asyncify(files_service.files_delete), methods=["DELETE"]
 )

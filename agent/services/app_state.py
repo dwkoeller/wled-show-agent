@@ -26,6 +26,11 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 
 from config.constants import APP_VERSION, SERVICE_NAME
+from services.scheduler_core import (
+    KV_SCHEDULER_CONFIG_KEY,
+    SchedulerConfig,
+    SchedulerService,
+)
 
 from models.requests import (
     A2AInvokeRequest,
@@ -105,10 +110,10 @@ except Exception:
 # ----------------------------
 SETTINGS: Settings | None = None
 
-DB_ENGINE = None
-ASYNC_DB = None
-JOB_STORE = None
-KV_STORE = None
+DB = None
+JOB_STORE = None  # JobStore-like (sync interface for JobManager)
+KV_STORE = None  # KVStore-like (sync get_json/set_json)
+MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 
 JOBS: JobManager | None = None
 APP_STARTED_AT: float = 0.0
@@ -131,8 +136,10 @@ FPP: FPPClient | None = None
 FLEET_SEQUENCES: FleetSequenceService | None = None
 
 DIRECTOR = None
+SCHEDULER: SchedulerService | None = None
+_SCHEDULER_CONFIG_PATH = ""
 
-_STATE_LOCK = threading.Lock()
+_STATE_LOCK = asyncio.Lock()
 _STATE_INITIALIZED = False
 
 _PEER_HTTP: httpx.Client | None = None
@@ -146,13 +153,26 @@ def _require_settings() -> Settings:
     return settings
 
 
-def startup(app: FastAPI | None = None) -> None:
+def _schedule_db_coro(coro) -> None:  # type: ignore[no-untyped-def]
+    """
+    Best-effort schedule an async DB coroutine from a worker thread.
+    """
+    loop = MAIN_LOOP
+    if loop is None:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception:
+        return
+
+
+async def startup(app: FastAPI | None = None) -> None:
     """
     Initialize all global singletons. This is called from FastAPI lifespan so the
     module can be imported without requiring runtime env vars (e.g. WLED_TREE_URL).
     """
     global SETTINGS
-    global DB_ENGINE, ASYNC_DB, JOB_STORE, KV_STORE
+    global DB, JOB_STORE, KV_STORE, MAIN_LOOP
     global JOBS, APP_STARTED_AT, _RUNTIME_STATE_PATH
     global WLED, MAPPER, SEGMENT_IDS
     global PEERS
@@ -161,7 +181,7 @@ def startup(app: FastAPI | None = None) -> None:
     global DIRECTOR
     global _STATE_INITIALIZED
 
-    with _STATE_LOCK:
+    async with _STATE_LOCK:
         if _STATE_INITIALIZED:
             return
 
@@ -169,49 +189,43 @@ def startup(app: FastAPI | None = None) -> None:
         SETTINGS = settings
         ensure_dir(settings.data_dir)
 
-        # Database (optional). Best-effort: never block startup if DB is unavailable.
-        DB_ENGINE = None
-        ASYNC_DB = None
+        APP_STARTED_AT = time.time()
+        loop = asyncio.get_running_loop()
+        MAIN_LOOP = loop
+
+        # Database (optional). Prefer async SQLModel (AsyncSession). Best-effort: DB issues
+        # should never prevent startup.
+        DB = None
         JOB_STORE = None
         KV_STORE = None
         if settings.database_url:
             try:
-                # Prefer async DB drivers (aiomysql/aiosqlite) when available; fall back to
-                # sync (pymysql/sqlite3) so DB issues never prevent startup.
-                from sql_store_async import AsyncSQLDatabase
+                from services.db_service import (
+                    AsyncJobStoreSyncAdapter,
+                    AsyncKVStoreSyncAdapter,
+                    DatabaseService,
+                )
 
-                ASYNC_DB = AsyncSQLDatabase(
+                db = DatabaseService(
                     database_url=settings.database_url,
                     agent_id=settings.agent_id,
                 )
-                JOB_STORE = ASYNC_DB.job_store
-                KV_STORE = ASYNC_DB.kv_store
+                await db.init()
+                DB = db
+                JOB_STORE = AsyncJobStoreSyncAdapter(loop=loop, db=db)
+                KV_STORE = AsyncKVStoreSyncAdapter(loop=loop, db=db)
             except Exception:
-                ASYNC_DB = None
-                try:
-                    from sql_store import (
-                        SQLJobStore,
-                        SQLKVStore,
-                        create_db_engine,
-                        init_db,
-                    )
+                DB = None
+                JOB_STORE = None
+                KV_STORE = None
 
-                    DB_ENGINE = create_db_engine(settings.database_url)
-                    init_db(DB_ENGINE)
-                    JOB_STORE = SQLJobStore(
-                        engine=DB_ENGINE, agent_id=settings.agent_id
-                    )
-                    KV_STORE = SQLKVStore(engine=DB_ENGINE, agent_id=settings.agent_id)
-                except Exception:
-                    DB_ENGINE = None
-                    JOB_STORE = None
-                    KV_STORE = None
-
-        JOBS = JobManager(
+        # JobManager is sync/threaded; create it off the event loop thread so it can use
+        # DB sync adapters without deadlocking.
+        JOBS = await asyncio.to_thread(
+            JobManager,
             persist_path=os.path.join(settings.data_dir, "jobs", "jobs.json"),
             store=JOB_STORE,
         )
-        APP_STARTED_AT = time.time()
         _RUNTIME_STATE_PATH = os.path.join(
             settings.data_dir, "state", "runtime_state.json"
         )
@@ -311,22 +325,88 @@ def startup(app: FastAPI | None = None) -> None:
 
         # Optional scheduler autostart
         try:
-            _scheduler_init()
+            await asyncio.to_thread(_scheduler_init)
             _scheduler_startup()
         except Exception:
             pass
 
+        maintenance_task = None
+        try:
+            if DB is not None and (
+                settings.job_history_max_rows > 0 or settings.job_history_max_days > 0
+            ):
+                interval_s = float(settings.job_history_maintenance_interval_s or 3600)
+
+                async def _retention_loop() -> None:
+                    while True:
+                        try:
+                            await DB.enforce_job_retention(
+                                max_rows=(
+                                    settings.job_history_max_rows
+                                    if settings.job_history_max_rows > 0
+                                    else None
+                                ),
+                                max_days=(
+                                    settings.job_history_max_days
+                                    if settings.job_history_max_days > 0
+                                    else None
+                                ),
+                            )
+                        except Exception:
+                            pass
+                        await asyncio.sleep(max(30.0, interval_s))
+
+                maintenance_task = asyncio.create_task(
+                    _retention_loop(), name="db_job_retention"
+                )
+        except Exception:
+            maintenance_task = None
+
         if app is not None:
             try:
-                app.state.wsa_settings = settings  # type: ignore[attr-defined]
+                from services.state import AppState
+
+                app.state.wsa = AppState(  # type: ignore[attr-defined]
+                    settings=settings,
+                    started_at=float(APP_STARTED_AT or time.time()),
+                    db=DB,
+                    jobs=JOBS,
+                    scheduler=SCHEDULER,
+                    peers=dict(PEERS),
+                    peer_http=httpx.AsyncClient(
+                        follow_redirects=True,
+                        headers={"User-Agent": f"{SERVICE_NAME}/{APP_VERSION}"},
+                        limits=httpx.Limits(
+                            max_connections=32, max_keepalive_connections=16
+                        ),
+                    ),
+                    loop=asyncio.get_running_loop(),
+                    maintenance_task=maintenance_task,
+                )
             except Exception:
                 pass
 
         _STATE_INITIALIZED = True
 
 
-def shutdown() -> None:
-    global _STATE_INITIALIZED
+async def shutdown(app: FastAPI | None = None) -> None:
+    global _STATE_INITIALIZED, DB, MAIN_LOOP
+    # Cancel background maintenance early (before DB close).
+    if app is not None:
+        try:
+            st = getattr(app.state, "wsa", None)
+            if st is not None:
+                t = getattr(st, "maintenance_task", None)
+                if t is not None:
+                    t.cancel()
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     try:
         _scheduler_shutdown()
     except Exception:
@@ -347,14 +427,29 @@ def shutdown() -> None:
     except Exception:
         pass
     try:
-        _db_shutdown()
+        if DB is not None:
+            await DB.close()
+            DB = None
     except Exception:
         pass
+    MAIN_LOOP = None
     try:
         _peer_http_shutdown()
     except Exception:
         pass
-    with _STATE_LOCK:
+    if app is not None:
+        try:
+            st = getattr(app.state, "wsa", None)
+            if st is not None:
+                if getattr(st, "peer_http", None) is not None:
+                    await st.peer_http.aclose()
+        except Exception:
+            pass
+        try:
+            delattr(app.state, "wsa")
+        except Exception:
+            pass
+    async with _STATE_LOCK:
         _STATE_INITIALIZED = False
 
 
@@ -393,14 +488,6 @@ def _persist_runtime_state(event: str, extra: Optional[Dict[str, Any]] = None) -
         write_json(_RUNTIME_STATE_PATH, out)
     except Exception:
         return
-
-
-def _db_shutdown() -> None:
-    try:
-        if ASYNC_DB is not None:
-            ASYNC_DB.shutdown()
-    except Exception:
-        pass
 
 
 def _peer_http_client() -> httpx.Client:
@@ -1166,12 +1253,26 @@ def looks_packs() -> Dict[str, Any]:
 def looks_apply_random(req: ApplyRandomLookRequest) -> Dict[str, Any]:
     try:
         COOLDOWN.wait()
-        out = LOOKS.apply_random(
-            theme=req.theme,
-            pack_file=req.pack_file,
-            brightness=req.brightness,
-            seed=req.seed,
+        pack, row = LOOKS.choose_random(
+            theme=req.theme, pack_file=req.pack_file, seed=req.seed
         )
+        out = LOOKS.apply_look(row, brightness_override=req.brightness)
+        try:
+            if DB is not None:
+                _schedule_db_coro(
+                    DB.set_last_applied(
+                        kind="look",
+                        name=str(out.get("name") or "") or None,
+                        file=str(pack) if pack else None,
+                        payload={
+                            "look": dict(row or {}),
+                            "result": dict(out or {}),
+                            "pack_file": str(pack) if pack else None,
+                        },
+                    )
+                )
+        except Exception:
+            pass
         return {"ok": True, "result": out}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1248,6 +1349,33 @@ def sequences_generate(req: GenerateSequenceRequest) -> Dict[str, Any]:
             ddp_patterns=ddp_pats,
             seed=req.seed,
         )
+        try:
+            if DB is not None:
+                seq_path = Path(SETTINGS.data_dir).resolve() / "sequences" / str(fname)
+                meta = read_json(str(seq_path))
+                steps = (
+                    list((meta or {}).get("steps", []))
+                    if isinstance(meta, dict)
+                    else []
+                )
+                steps_total = len([s for s in steps if isinstance(s, dict)])
+                duration_s = 0.0
+                for s in steps:
+                    if not isinstance(s, dict):
+                        continue
+                    try:
+                        duration_s += float(s.get("duration_s") or 0.0)
+                    except Exception:
+                        continue
+                _schedule_db_coro(
+                    DB.upsert_sequence_meta(
+                        file=str(fname),
+                        duration_s=float(duration_s),
+                        steps_total=int(steps_total),
+                    )
+                )
+        except Exception:
+            pass
         return {"ok": True, "file": fname}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1263,6 +1391,18 @@ def sequences_play(req: PlaySequenceRequest) -> Dict[str, Any]:
         _persist_runtime_state(
             "sequences_play", {"file": req.file, "loop": bool(req.loop)}
         )
+        try:
+            if DB is not None:
+                _schedule_db_coro(
+                    DB.set_last_applied(
+                        kind="sequence",
+                        name=str(req.file),
+                        file=str(req.file),
+                        payload={"file": str(req.file), "loop": bool(req.loop)},
+                    )
+                )
+        except Exception:
+            pass
         return {"ok": True, "status": st.__dict__}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1453,6 +1593,26 @@ def audio_analyze(
             if base in out_path.resolve().parents
             else str(out_path)
         )
+        try:
+            if DB is not None:
+                rel_audio = (
+                    str(audio_path.resolve().relative_to(base))
+                    if base in audio_path.resolve().parents
+                    else str(audio_path)
+                )
+                _schedule_db_coro(
+                    DB.add_audio_analysis(
+                        analysis_id=uuid.uuid4().hex,
+                        source_path=rel_audio,
+                        beats_path=rel_out,
+                        prefer_ffmpeg=bool(req.prefer_ffmpeg),
+                        bpm=float(analysis.bpm),
+                        beat_count=len(list(analysis.beats_s or [])),
+                        error=None,
+                    )
+                )
+        except Exception:
+            pass
         return {"ok": True, "analysis": out, "out_file": rel_out}
     except HTTPException:
         raise
@@ -3068,13 +3228,28 @@ async def packs_ingest(
             shutil.rmtree(final_dir)
         os.replace(str(staging_dir), str(final_dir))
 
+        manifest_path = f"{dest_rel.rstrip('/')}/manifest.json"
+        try:
+            st = getattr(request.app.state, "wsa", None)
+            if st is not None and getattr(st, "db", None) is not None:
+                await st.db.upsert_pack_ingest(
+                    dest_dir=dest_rel,
+                    source_name=None,
+                    manifest_path=manifest_path,
+                    uploaded_bytes=total_bytes,
+                    unpacked_bytes=unpacked_bytes,
+                    file_count=len(extracted),
+                )
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "dest_dir": dest_rel,
             "uploaded_bytes": total_bytes,
             "unpacked_bytes": unpacked_bytes,
             "files": sorted(extracted),
-            "manifest": f"{dest_rel.rstrip('/')}/manifest.json",
+            "manifest": manifest_path,
         }
     finally:
         try:
@@ -3110,11 +3285,8 @@ def runtime_state(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
 # Scheduler (show automation)
 # ----------------------------
 
-_SCHEDULER_CONFIG_PATH = ""
-_KV_SCHEDULER_CONFIG_KEY = "scheduler_config"
 
-
-class SchedulerConfig(BaseModel):
+class _LegacySchedulerConfig(BaseModel):
     enabled: bool = True
     autostart: bool = False
     start_hhmm: str = Field(default="17:00")
@@ -3157,7 +3329,7 @@ def _in_window(now_min: int, start_min: int, end_min: int) -> bool:
     return now_min >= start_min or now_min < end_min
 
 
-class SchedulerService:
+class _LegacySchedulerService:
     def __init__(
         self, config_path: str, *, kv_store: Any = None, kv_key: str = ""
     ) -> None:
@@ -3432,17 +3604,150 @@ class SchedulerService:
                 self._last_error = str(e)
 
 
-SCHEDULER: SchedulerService | None = None
-
-
 def _scheduler_init() -> None:
     global _SCHEDULER_CONFIG_PATH, SCHEDULER
     settings = SETTINGS
     if settings is None:
         return
     _SCHEDULER_CONFIG_PATH = os.path.join(settings.data_dir, "show", "scheduler.json")
+
+    def _stop_all_cb(cfg: SchedulerConfig, reason: str) -> None:
+        if cfg.scope == "fleet":
+            fleet_stop_all(
+                FleetStopAllRequest(targets=cfg.targets, include_self=cfg.include_self),
+                None,
+            )
+            return
+        _a2a_action_stop_all({})
+        _persist_runtime_state("scheduler_stop_all", {"reason": reason})
+
+    def _apply_random_look_cb(cfg: SchedulerConfig, reason: str) -> None:
+        bri = (
+            min(settings.wled_max_bri, cfg.brightness)
+            if cfg.brightness is not None
+            else None
+        )
+        if cfg.scope == "fleet":
+            res = fleet_apply_random_look(
+                FleetApplyRandomLookRequest(
+                    theme=cfg.theme,
+                    brightness=bri,
+                    targets=cfg.targets,
+                    include_self=cfg.include_self,
+                ),
+                None,
+            )
+            try:
+                if DB is not None:
+                    picked = ((res or {}).get("result") or {}).get("picked") or {}
+                    pack_file = ((res or {}).get("result") or {}).get("pack_file")
+                    _schedule_db_coro(
+                        DB.set_last_applied(
+                            kind="look",
+                            name=str(picked.get("name") or "") or None,
+                            file=str(pack_file) if pack_file else None,
+                            payload={
+                                "picked": dict(picked or {}),
+                                "pack_file": str(pack_file) if pack_file else None,
+                                "brightness_override": bri,
+                                "scope": "fleet",
+                                "reason": reason,
+                            },
+                        )
+                    )
+            except Exception:
+                pass
+            return
+
+        if LOOKS is None or COOLDOWN is None:
+            raise RuntimeError("Looks service not initialized")
+        pack_file, row = LOOKS.choose_random(theme=cfg.theme)
+        COOLDOWN.wait()
+        LOOKS.apply_look(row, brightness_override=bri)
+        _persist_runtime_state("scheduler_apply_random_look", {"reason": reason})
+        try:
+            if DB is not None:
+                _schedule_db_coro(
+                    DB.set_last_applied(
+                        kind="look",
+                        name=str(row.get("name") or "") or None,
+                        file=str(pack_file) if pack_file else None,
+                        payload={
+                            "look": dict(row or {}),
+                            "pack_file": str(pack_file) if pack_file else None,
+                            "brightness_override": bri,
+                            "scope": "local",
+                            "reason": reason,
+                        },
+                    )
+                )
+        except Exception:
+            pass
+
+    def _ensure_sequence_cb(cfg: SchedulerConfig, reason: str) -> None:
+        file = (cfg.sequence_file or "").strip()
+        if not file:
+            raise RuntimeError("sequence_file is required for mode=sequence")
+
+        if cfg.scope == "fleet":
+            if FLEET_SEQUENCES is None:
+                raise RuntimeError("Fleet sequence service not initialized")
+            st = FLEET_SEQUENCES.status()
+            if (
+                (not st.running)
+                or (st.file != file)
+                or (bool(st.loop) != bool(cfg.sequence_loop))
+            ):
+                FLEET_SEQUENCES.start(
+                    file=file,
+                    loop=bool(cfg.sequence_loop),
+                    targets=cfg.targets,
+                    include_self=cfg.include_self,
+                )
+                _persist_runtime_state(
+                    "scheduler_start_fleet_sequence", {"file": file, "reason": reason}
+                )
+        else:
+            if SEQUENCES is None:
+                raise RuntimeError("Sequence service not initialized")
+            st = SEQUENCES.status()
+            if (
+                (not st.running)
+                or (st.file != file)
+                or (bool(st.loop) != bool(cfg.sequence_loop))
+            ):
+                SEQUENCES.play(file=file, loop=bool(cfg.sequence_loop))
+                _persist_runtime_state(
+                    "scheduler_play_sequence", {"file": file, "reason": reason}
+                )
+
+        try:
+            if DB is not None:
+                _schedule_db_coro(
+                    DB.set_last_applied(
+                        kind="sequence",
+                        name=None,
+                        file=file,
+                        payload={
+                            "file": file,
+                            "loop": bool(cfg.sequence_loop),
+                            "scope": str(cfg.scope),
+                            "targets": list(cfg.targets or []),
+                            "include_self": bool(cfg.include_self),
+                            "reason": reason,
+                        },
+                    )
+                )
+        except Exception:
+            pass
+
     SCHEDULER = SchedulerService(
-        _SCHEDULER_CONFIG_PATH, kv_store=KV_STORE, kv_key=_KV_SCHEDULER_CONFIG_KEY
+        _SCHEDULER_CONFIG_PATH,
+        kv_store=KV_STORE,
+        kv_key=KV_SCHEDULER_CONFIG_KEY,
+        stop_all_cb=_stop_all_cb,
+        apply_random_look_cb=_apply_random_look_cb,
+        ensure_sequence_cb=_ensure_sequence_cb,
     )
 
 
@@ -3462,54 +3767,6 @@ def _scheduler_shutdown() -> None:
         pass
 
 
-def scheduler_status(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    return SCHEDULER.status()
-
-
-def scheduler_get_config(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    return {"ok": True, "config": SCHEDULER.get_config().model_dump()}
-
-
-def scheduler_set_config(
-    cfg: SchedulerConfig, _: None = Depends(_require_a2a_auth)
-) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    # Validate times early to return a friendly 400.
-    try:
-        _hhmm_to_minutes(cfg.start_hhmm)
-        _hhmm_to_minutes(cfg.end_hhmm)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    SCHEDULER.set_config(cfg, persist=True)
-    return {"ok": True, "config": cfg.model_dump()}
-
-
-def scheduler_start(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    SCHEDULER.start()
-    return SCHEDULER.status()
-
-
-def scheduler_stop(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    SCHEDULER.stop()
-    return SCHEDULER.status()
-
-
-def scheduler_run_once(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
-    if SCHEDULER is None:
-        raise HTTPException(status_code=503, detail="Scheduler not initialized")
-    SCHEDULER.run_once()
-    return SCHEDULER.status()
-
-
 def metrics(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
     """
     Lightweight JSON metrics for LAN monitoring.
@@ -3526,10 +3783,14 @@ def metrics(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
         "version": APP_VERSION,
         "uptime_s": max(0.0, time.time() - APP_STARTED_AT),
         "peers_configured": len(PEERS),
-        "jobs": {"count": len(JOBS.list_jobs(limit=10_000))},
-        "scheduler": SCHEDULER.status(),
-        "ddp": DDP.status().__dict__,
-        "sequence": SEQUENCES.status().__dict__,
+        "jobs": {"count": len(JOBS.list_jobs(limit=10_000)) if JOBS else 0},
+        "scheduler": (
+            SCHEDULER.status()
+            if SCHEDULER is not None
+            else {"ok": False, "error": "Scheduler not initialized"}
+        ),
+        "ddp": DDP.status().__dict__ if DDP is not None else None,
+        "sequence": SEQUENCES.status().__dict__ if SEQUENCES is not None else None,
         "fleet_sequence": fleet_st,
     }
 
@@ -3663,6 +3924,26 @@ def jobs_audio_analyze(
             if base in out_path.resolve().parents
             else str(out_path)
         )
+        try:
+            if DB is not None:
+                rel_audio = (
+                    str(audio_path.resolve().relative_to(base))
+                    if base in audio_path.resolve().parents
+                    else str(audio_path)
+                )
+                _schedule_db_coro(
+                    DB.add_audio_analysis(
+                        analysis_id=str(ctx.job_id),
+                        source_path=rel_audio,
+                        beats_path=rel_out,
+                        prefer_ffmpeg=bool(params.get("prefer_ffmpeg")),
+                        bpm=float(analysis.bpm),
+                        beat_count=len(list(analysis.beats_s or [])),
+                        error=None,
+                    )
+                )
+        except Exception:
+            pass
         ctx.set_progress(message="Done.")
         return {"analysis": out, "out_file": rel_out}
 
@@ -3858,6 +4139,33 @@ def jobs_sequences_generate(
             ddp_patterns=ddp_pats,
             seed=int(params["seed"]),
         )
+        try:
+            if DB is not None:
+                seq_path = Path(SETTINGS.data_dir).resolve() / "sequences" / str(fname)
+                meta = read_json(str(seq_path))
+                steps = (
+                    list((meta or {}).get("steps", []))
+                    if isinstance(meta, dict)
+                    else []
+                )
+                steps_total = len([s for s in steps if isinstance(s, dict)])
+                duration_s = 0.0
+                for s in steps:
+                    if not isinstance(s, dict):
+                        continue
+                    try:
+                        duration_s += float(s.get("duration_s") or 0.0)
+                    except Exception:
+                        continue
+                _schedule_db_coro(
+                    DB.upsert_sequence_meta(
+                        file=str(fname),
+                        duration_s=float(duration_s),
+                        steps_total=int(steps_total),
+                    )
+                )
+        except Exception:
+            pass
         ctx.set_progress(current=3, total=3, message="Done.")
         return {"file": fname}
 

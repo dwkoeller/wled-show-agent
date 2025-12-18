@@ -186,6 +186,9 @@ class Settings:
 
     # Database (optional)
     database_url: str | None
+    job_history_max_rows: int
+    job_history_max_days: int
+    job_history_maintenance_interval_s: int
 
     # OpenAI
     openai_api_key: str | None
@@ -218,6 +221,11 @@ class Settings:
     auth_totp_secret: str | None
     auth_totp_issuer: str
 
+    # Metrics / Prometheus
+    metrics_public: bool
+    metrics_scrape_token: str | None
+    metrics_scrape_header: str
+
     @property
     def tree_total_pixels(self) -> int:
         if self.tree_runs > 0 and self.tree_pixels_per_run > 0:
@@ -239,6 +247,11 @@ def load_settings() -> Settings:
 
     data_dir = os.environ.get("DATA_DIR", "/data").strip() or "/data"
     database_url = os.environ.get("DATABASE_URL", "").strip() or None
+    job_history_max_rows = max(0, _as_int(os.environ.get("JOB_HISTORY_MAX_ROWS"), 2000))
+    job_history_max_days = max(0, _as_int(os.environ.get("JOB_HISTORY_MAX_DAYS"), 30))
+    job_history_maintenance_interval_s = max(
+        60, _as_int(os.environ.get("JOB_HISTORY_MAINTENANCE_INTERVAL_S"), 3600)
+    )
 
     wled_http_timeout_s = _as_float(os.environ.get("WLED_HTTP_TIMEOUT_S"), 2.5)
     wled_max_bri = max(1, min(255, _as_int(os.environ.get("WLED_MAX_BRI"), 180)))
@@ -332,6 +345,12 @@ def load_settings() -> Settings:
         os.environ.get("AUTH_TOTP_ISSUER"), default=auth_jwt_issuer
     )
 
+    metrics_public = _as_bool(os.environ.get("METRICS_PUBLIC"), False)
+    metrics_scrape_token = os.environ.get("METRICS_SCRAPE_TOKEN", "").strip() or None
+    metrics_scrape_header = _as_str(
+        os.environ.get("METRICS_SCRAPE_HEADER"), default="X-Metrics-Token"
+    )
+
     if auth_enabled:
         if not auth_password:
             raise RuntimeError("AUTH_PASSWORD is required when AUTH_ENABLED=true")
@@ -387,6 +406,9 @@ def load_settings() -> Settings:
         pixel_source_name=pixel_source_name,
         data_dir=data_dir,
         database_url=database_url,
+        job_history_max_rows=job_history_max_rows,
+        job_history_max_days=job_history_max_days,
+        job_history_maintenance_interval_s=job_history_maintenance_interval_s,
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         agent_id=agent_id,
@@ -410,4 +432,7 @@ def load_settings() -> Settings:
         auth_totp_enabled=auth_totp_enabled,
         auth_totp_secret=auth_totp_secret,
         auth_totp_issuer=auth_totp_issuer,
+        metrics_public=metrics_public,
+        metrics_scrape_token=metrics_scrape_token,
+        metrics_scrape_header=metrics_scrape_header,
     )

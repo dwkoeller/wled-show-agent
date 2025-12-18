@@ -10,7 +10,7 @@ router = APIRouter()
 
 router.add_api_route(
     "/metrics",
-    asyncify(prometheus_metrics.metrics_endpoint),
+    asyncify(prometheus_metrics.metrics_endpoint_with_state),
     methods=["GET"],
     include_in_schema=False,
 )

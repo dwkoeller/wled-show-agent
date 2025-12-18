@@ -220,6 +220,17 @@ class JobManager:
             )
             return jobs_mem[:lim]
 
+    def status_counts(self) -> Dict[str, int]:
+        """
+        Return counts by status for the in-memory job set (fast, no DB access).
+        """
+        out: Dict[str, int] = {}
+        with self._lock:
+            for j in self._jobs.values():
+                st = str(j.status)
+                out[st] = out.get(st, 0) + 1
+        return out
+
     def get(self, job_id: str) -> Optional[Job]:
         jid = str(job_id)
         with self._lock:

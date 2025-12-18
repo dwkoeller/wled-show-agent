@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column
+from sqlalchemy import Column, Index
 from sqlalchemy.types import JSON
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
@@ -35,8 +35,20 @@ def create_db_engine(database_url: str, *, echo: bool = False):  # type: ignore[
     )
 
 
+class SchemaVersion(SQLModel, table=True):
+    __tablename__ = "schema_version"
+
+    id: int = Field(default=1, primary_key=True)
+    version: int = Field(index=True)
+    updated_at: float = Field(index=True)
+
+
 class JobRecord(SQLModel, table=True):
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_agent_created_at", "agent_id", "created_at"),
+        Index("ix_jobs_agent_status_created_at", "agent_id", "status", "created_at"),
+    )
 
     agent_id: str = Field(primary_key=True, max_length=128)
     id: str = Field(primary_key=True, max_length=64)
@@ -53,12 +65,108 @@ class JobRecord(SQLModel, table=True):
 
 class KVRecord(SQLModel, table=True):
     __tablename__ = "kv"
+    __table_args__ = (Index("ix_kv_agent_updated_at", "agent_id", "updated_at"),)
 
     agent_id: str = Field(primary_key=True, max_length=128)
     key: str = Field(primary_key=True, max_length=256)
 
     updated_at: float = Field(index=True)
     value: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class PackIngestRecord(SQLModel, table=True):
+    """
+    Metadata for uploaded/unpacked zip packs under DATA_DIR.
+
+    This stores metadata only (paths, sizes, timestamps) and not the file contents.
+    """
+
+    __tablename__ = "pack_ingests"
+    __table_args__ = (
+        Index("ix_pack_ingests_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    dest_dir: str = Field(primary_key=True, max_length=512)  # relative to DATA_DIR
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    source_name: str | None = Field(default=None, max_length=256)
+    manifest_path: str | None = Field(default=None, max_length=512)
+
+    uploaded_bytes: int = Field(default=0)
+    unpacked_bytes: int = Field(default=0)
+    file_count: int = Field(default=0)
+
+
+class SequenceMetaRecord(SQLModel, table=True):
+    """
+    Metadata for sequences stored under DATA_DIR/sequences.
+    """
+
+    __tablename__ = "sequence_meta"
+    __table_args__ = (
+        Index("ix_sequence_meta_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    file: str = Field(
+        primary_key=True, max_length=512
+    )  # relative path under DATA_DIR/sequences
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    duration_s: float = Field(default=0.0)
+    steps_total: int = Field(default=0)
+
+
+class AudioAnalysisRecord(SQLModel, table=True):
+    """
+    Metadata for audio analysis runs (beats/BPM extraction).
+    """
+
+    __tablename__ = "audio_analyses"
+    __table_args__ = (
+        Index("ix_audio_analyses_agent_created_at", "agent_id", "created_at"),
+        Index("ix_audio_analyses_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    id: str = Field(primary_key=True, max_length=64)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    source_path: str | None = Field(default=None, max_length=512)
+    beats_path: str | None = Field(default=None, max_length=512)
+    prefer_ffmpeg: bool = Field(default=False)
+
+    bpm: float | None = None
+    beat_count: int | None = None
+
+    error: str | None = Field(default=None, max_length=512)
+
+
+class LastAppliedRecord(SQLModel, table=True):
+    """
+    Small UI-facing state: last applied look/sequence (metadata only).
+    """
+
+    __tablename__ = "last_applied"
+    __table_args__ = (
+        Index("ix_last_applied_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    kind: str = Field(primary_key=True, max_length=32)  # 'look' or 'sequence'
+
+    updated_at: float = Field(index=True)
+
+    name: str | None = Field(default=None, max_length=256)
+    file: str | None = Field(default=None, max_length=512)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
 def init_db(engine) -> None:  # type: ignore[no-untyped-def]
