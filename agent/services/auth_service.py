@@ -114,6 +114,7 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
     # Public endpoints.
     if (
         path == "/"
+        or path == "/livez"
         or path == "/readyz"
         or path.startswith("/ui")
         or path.startswith("/v1/health")

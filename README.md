@@ -207,6 +207,7 @@ If you want the agent to control Falcon Player (playlist start/stop, event trigg
 - `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). When set, job history + small UI state (scheduler config and `runtime_state`) are also persisted in SQL.
 - With the included MySQL container: run `docker compose --profile db up -d --build` and set `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa`.
 - Retention (SQL only): `JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`.
+- Optional startup reconcile (SQL only): `DB_RECONCILE_ON_STARTUP=true` to scan `DATA_DIR` and backfill metadata tables.
 
 ### AI capability + cost (estimates)
 
@@ -250,6 +251,7 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 ### Status / diagnostics
 
 - `GET /v1/health`
+- `GET /livez` – liveness probe (always 200 if process is up)
 - `GET /readyz` – readiness checks (WLED + DB)
 - `GET /v1/wled/info`
 - `GET /v1/wled/state`
@@ -361,6 +363,7 @@ UI-facing metadata backed by SQL (when `DATABASE_URL` is set):
 - `GET /v1/meta/sequences`
 - `GET /v1/meta/audio_analyses`
 - `GET /v1/meta/last_applied`
+- `POST /v1/meta/reconcile` – scan `DATA_DIR` and upsert metadata rows
 
 ### Metrics
 

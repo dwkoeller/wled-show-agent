@@ -99,6 +99,16 @@ export function DashboardPage() {
           error: e instanceof Error ? e.message : String(e),
         };
       }
+      try {
+        out.last_applied = await api("/v1/meta/last_applied", {
+          method: "GET",
+        });
+      } catch (e) {
+        out.last_applied = {
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
       setStatus(out);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
 from fastapi import HTTPException, Request
 
 from config import Settings
+from rate_limiter import AsyncCooldown
 
 
 @dataclass
 class AppState:
     settings: Settings
     started_at: float
+
+    # WLED runtime config (derived on startup).
+    segment_ids: list[int] = field(default_factory=list)
+    wled_cooldown: AsyncCooldown | None = None
 
     # Optional async DB service (SQLModel / AsyncSession).
     db: Any = None
@@ -30,7 +35,10 @@ class AppState:
     # Main event loop (used for sync<->async bridges).
     loop: Optional[asyncio.AbstractEventLoop] = None
 
-    # Background maintenance tasks (e.g., DB retention).
+    # Background maintenance tasks (e.g., DB retention, reconciler).
+    maintenance_tasks: list[Any] = field(default_factory=list)
+
+    # Back-compat: legacy single maintenance task.
     maintenance_task: Any = None
 
     def uptime_s(self) -> float:

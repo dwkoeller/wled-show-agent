@@ -24,3 +24,8 @@ router.add_api_route(
     asyncify(metadata_service.meta_last_applied),
     methods=["GET"],
 )
+router.add_api_route(
+    "/v1/meta/reconcile",
+    asyncify(metadata_service.meta_reconcile),
+    methods=["POST"],
+)

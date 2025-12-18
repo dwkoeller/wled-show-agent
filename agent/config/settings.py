@@ -189,6 +189,7 @@ class Settings:
     job_history_max_rows: int
     job_history_max_days: int
     job_history_maintenance_interval_s: int
+    db_reconcile_on_startup: bool
 
     # OpenAI
     openai_api_key: str | None
@@ -251,6 +252,9 @@ def load_settings() -> Settings:
     job_history_max_days = max(0, _as_int(os.environ.get("JOB_HISTORY_MAX_DAYS"), 30))
     job_history_maintenance_interval_s = max(
         60, _as_int(os.environ.get("JOB_HISTORY_MAINTENANCE_INTERVAL_S"), 3600)
+    )
+    db_reconcile_on_startup = _as_bool(
+        os.environ.get("DB_RECONCILE_ON_STARTUP"), default=True
     )
 
     wled_http_timeout_s = _as_float(os.environ.get("WLED_HTTP_TIMEOUT_S"), 2.5)
@@ -409,6 +413,7 @@ def load_settings() -> Settings:
         job_history_max_rows=job_history_max_rows,
         job_history_max_days=job_history_max_days,
         job_history_maintenance_interval_s=job_history_maintenance_interval_s,
+        db_reconcile_on_startup=bool(db_reconcile_on_startup),
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         agent_id=agent_id,

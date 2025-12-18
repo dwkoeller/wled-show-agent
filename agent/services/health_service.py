@@ -19,6 +19,10 @@ def health() -> Dict[str, Any]:
     return {"ok": True, "service": SERVICE_NAME, "version": APP_VERSION}
 
 
+def livez() -> JSONResponse:
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
 async def readyz(state: AppState = Depends(get_state)) -> Dict[str, Any]:
     checks: Dict[str, Any] = {}
     ok = True

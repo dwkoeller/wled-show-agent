@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException
 from sqlmodel import select
 
 from services.auth_service import require_a2a_auth
+from services.reconcile_service import reconcile_data_dir
 from services.state import AppState, get_state
 from sql_store import (
     AudioAnalysisRecord,
@@ -100,3 +101,20 @@ async def meta_last_applied(
     for r in rows:
         out[str(r.kind)] = r.model_dump()
     return {"ok": True, "last_applied": out}
+
+
+async def meta_reconcile(
+    packs: bool = True,
+    sequences: bool = True,
+    audio: bool = False,
+    scan_limit: int = 5000,
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    return await reconcile_data_dir(
+        state,
+        packs=bool(packs),
+        sequences=bool(sequences),
+        audio=bool(audio),
+        scan_limit=int(scan_limit),
+    )

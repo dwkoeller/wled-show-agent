@@ -8,12 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - Optional MySQL persistence (SQLModel) behind `DATABASE_URL` for job history and small UI state (scheduler config + runtime snapshot).
 - Docker Compose `db` profile with a MySQL service (`docker-compose.yml`, `docker-compose.fleet.yml`).
-- Async DB drivers support (`aiomysql`/`aiosqlite`) with fallback to sync DB drivers when unavailable.
+- Async DB drivers support (`aiomysql`/`aiosqlite`).
 - Backend refactor: app factory + lifespan wiring (`agent/app_factory.py`), routers split into `agent/routes/*`, and main backend module moved to `agent/services/app_state.py`.
 - Pack ingestion: `PUT /v1/packs/ingest` (zip upload + unpack) and UI tab (Tools → Packs).
 - Prometheus endpoint `GET /metrics` plus request/latency middleware.
+- Liveness endpoint `GET /livez`.
 - Readiness endpoint `GET /readyz` (checks WLED reachability + DB).
 - SQL-backed metadata endpoints for UI: `GET /v1/meta/packs`, `/v1/meta/sequences`, `/v1/meta/audio_analyses`, `/v1/meta/last_applied`.
+- Metadata reconciler: `POST /v1/meta/reconcile` and `DB_RECONCILE_ON_STARTUP`.
 - Job history retention/maintenance via `JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, and `JOB_HISTORY_MAINTENANCE_INTERVAL_S`.
 - Optional Prometheus scrape auth settings: `METRICS_PUBLIC`, `METRICS_SCRAPE_TOKEN`, `METRICS_SCRAPE_HEADER`.
 - `X-Request-Id` middleware and structured request logging.

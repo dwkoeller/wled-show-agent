@@ -78,7 +78,7 @@ from geometry import TreeGeometry
 from look_service import LookService
 from pack_io import ensure_dir, read_json, read_jsonl, write_json
 from preset_importer import PresetImporter
-from rate_limiter import Cooldown
+from rate_limiter import AsyncCooldown, Cooldown
 from sequence_service import SequenceService
 from fleet_sequence_service import FleetSequenceService
 from wled_client import WLEDClient, WLEDError
@@ -330,7 +330,7 @@ async def startup(app: FastAPI | None = None) -> None:
         except Exception:
             pass
 
-        maintenance_task = None
+        maintenance_tasks: list[asyncio.Task] = []
         try:
             if DB is not None and (
                 settings.job_history_max_rows > 0 or settings.job_history_max_days > 0
@@ -356,19 +356,21 @@ async def startup(app: FastAPI | None = None) -> None:
                             pass
                         await asyncio.sleep(max(30.0, interval_s))
 
-                maintenance_task = asyncio.create_task(
-                    _retention_loop(), name="db_job_retention"
+                maintenance_tasks.append(
+                    asyncio.create_task(_retention_loop(), name="db_job_retention")
                 )
         except Exception:
-            maintenance_task = None
+            maintenance_tasks = []
 
         if app is not None:
             try:
                 from services.state import AppState
 
-                app.state.wsa = AppState(  # type: ignore[attr-defined]
+                st = AppState(
                     settings=settings,
                     started_at=float(APP_STARTED_AT or time.time()),
+                    segment_ids=list(SEGMENT_IDS),
+                    wled_cooldown=AsyncCooldown(settings.wled_command_cooldown_ms),
                     db=DB,
                     jobs=JOBS,
                     scheduler=SCHEDULER,
@@ -381,8 +383,22 @@ async def startup(app: FastAPI | None = None) -> None:
                         ),
                     ),
                     loop=asyncio.get_running_loop(),
-                    maintenance_task=maintenance_task,
+                    maintenance_tasks=maintenance_tasks,
                 )
+                app.state.wsa = st  # type: ignore[attr-defined]
+
+                if DB is not None and settings.db_reconcile_on_startup:
+                    try:
+                        from services.reconcile_service import reconcile_data_dir
+
+                        maintenance_tasks.append(
+                            asyncio.create_task(
+                                reconcile_data_dir(st),
+                                name="db_reconcile_data_dir",
+                            )
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -396,9 +412,22 @@ async def shutdown(app: FastAPI | None = None) -> None:
         try:
             st = getattr(app.state, "wsa", None)
             if st is not None:
-                t = getattr(st, "maintenance_task", None)
-                if t is not None:
-                    t.cancel()
+                tasks: list[asyncio.Task] = []
+                ts = getattr(st, "maintenance_tasks", None)
+                if isinstance(ts, list):
+                    for t in ts:
+                        if isinstance(t, asyncio.Task):
+                            tasks.append(t)
+                t1 = getattr(st, "maintenance_task", None)
+                if isinstance(t1, asyncio.Task):
+                    tasks.append(t1)
+                # Cancel + await in two phases to avoid deadlocks.
+                for t in tasks:
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
+                for t in tasks:
                     try:
                         await t
                     except asyncio.CancelledError:

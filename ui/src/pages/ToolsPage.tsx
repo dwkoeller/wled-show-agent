@@ -5,6 +5,7 @@ import MusicNoteIcon from "@mui/icons-material/MusicNote";
 import MovieFilterIcon from "@mui/icons-material/MovieFilter";
 import RouterIcon from "@mui/icons-material/Router";
 import ScheduleIcon from "@mui/icons-material/Schedule";
+import StorageIcon from "@mui/icons-material/Storage";
 import SyncAltIcon from "@mui/icons-material/SyncAlt";
 import {
   Box,
@@ -27,6 +28,7 @@ import { AudioTools } from "./tools/AudioTools";
 import { FilesTools } from "./tools/FilesTools";
 import { FppTools } from "./tools/FppTools";
 import { FseqTools } from "./tools/FseqTools";
+import { MetadataTools } from "./tools/MetadataTools";
 import { PacksTools } from "./tools/PacksTools";
 import { SchedulerTools } from "./tools/SchedulerTools";
 import { SequenceTools } from "./tools/SequenceTools";
@@ -44,6 +46,7 @@ const tabs: ToolTab[] = [
   { label: "Files", value: "/tools/files", icon: <FolderIcon /> },
   { label: "Packs", value: "/tools/packs", icon: <ArchiveIcon /> },
   { label: "Sequences", value: "/tools/sequences", icon: <SyncAltIcon /> },
+  { label: "Metadata", value: "/tools/meta", icon: <StorageIcon /> },
   { label: ".fseq", value: "/tools/fseq", icon: <MovieFilterIcon /> },
   { label: "FPP", value: "/tools/fpp", icon: <RouterIcon /> },
   { label: "Scheduler", value: "/tools/scheduler", icon: <ScheduleIcon /> },
@@ -95,6 +98,7 @@ export function ToolsPage() {
         <Route path="files" element={<FilesTools />} />
         <Route path="packs" element={<PacksTools />} />
         <Route path="sequences" element={<SequenceTools />} />
+        <Route path="meta" element={<MetadataTools />} />
         <Route path="fseq" element={<FseqTools />} />
         <Route path="fpp" element={<FppTools />} />
         <Route path="scheduler" element={<SchedulerTools />} />
