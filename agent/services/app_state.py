@@ -510,6 +510,10 @@ async def startup(app: FastAPI | None = None) -> None:
                             "openai_enabled": bool(settings.openai_api_key),
                             "fpp_enabled": bool(settings.fpp_base_url),
                         }
+                        if settings.agent_base_url:
+                            payload["base_url"] = str(settings.agent_base_url)
+                        if settings.agent_tags:
+                            payload["tags"] = [str(x) for x in settings.agent_tags]
                         try:
                             payload["status"] = await a2a_service.actions()["status"](
                                 st, {}
@@ -575,22 +579,30 @@ async def startup(app: FastAPI | None = None) -> None:
             or settings.scheduler_events_max_days > 0
         ):
             interval_s = float(settings.scheduler_events_maintenance_interval_s or 3600)
+            lease_key = "wsa:maintenance:scheduler_events_retention"
+            lease_ttl_s = max(120.0, interval_s * 2.0)
 
             async def _scheduler_events_retention_loop() -> None:
                 while True:
                     try:
-                        await db.enforce_scheduler_events_retention(
-                            max_rows=(
-                                settings.scheduler_events_max_rows
-                                if settings.scheduler_events_max_rows > 0
-                                else None
-                            ),
-                            max_days=(
-                                settings.scheduler_events_max_days
-                                if settings.scheduler_events_max_days > 0
-                                else None
-                            ),
+                        acquired = await db.try_acquire_lease(
+                            key=str(lease_key),
+                            owner_id=str(settings.agent_id),
+                            ttl_s=float(lease_ttl_s),
                         )
+                        if acquired:
+                            await db.enforce_scheduler_events_retention(
+                                max_rows=(
+                                    settings.scheduler_events_max_rows
+                                    if settings.scheduler_events_max_rows > 0
+                                    else None
+                                ),
+                                max_days=(
+                                    settings.scheduler_events_max_days
+                                    if settings.scheduler_events_max_days > 0
+                                    else None
+                                ),
+                            )
                     except Exception:
                         pass
                     await asyncio.sleep(max(30.0, interval_s))

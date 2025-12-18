@@ -65,6 +65,14 @@ class AsyncSchedulerService:
         self._lease_owner: str | None = None
         self._lease_expires_at: float | None = None
 
+        roles = tuple(getattr(self._state.settings, "scheduler_leader_roles", ()) or ())
+        self._leader_roles = roles
+        self._leader_eligible = bool(
+            (not roles)
+            or ("*" in roles)
+            or (str(self._state.settings.agent_role) in set(roles))
+        )
+
         self._config = SchedulerConfig()
 
     async def init(self) -> None:
@@ -125,6 +133,8 @@ class AsyncSchedulerService:
             leader = bool(self._leader)
             lease_owner = self._lease_owner
             lease_expires_at = self._lease_expires_at
+            eligible = bool(self._leader_eligible)
+            roles = list(self._leader_roles or [])
 
         now_ts = time.time()
         next_in_s: float | None = None
@@ -144,6 +154,8 @@ class AsyncSchedulerService:
             "ok": True,
             "running": running,
             "in_window": in_window_now,
+            "eligible": eligible,
+            "leader_roles": roles,
             "leader": leader,
             "lease": {
                 "key": self._lease_key,
@@ -185,6 +197,27 @@ class AsyncSchedulerService:
                 self._lease_owner = self._state.settings.agent_id
                 self._lease_expires_at = None
             return True
+
+        # If this node isn't eligible to be scheduler leader (by role), never acquire.
+        if not bool(self._leader_eligible):
+            lease_owner = None
+            lease_expires_at = None
+            try:
+                lease = await db.get_lease(str(self._lease_key))
+                if lease:
+                    lease_owner = str(lease.get("owner_id") or "") or None
+                    try:
+                        lease_expires_at = float(lease.get("expires_at"))  # type: ignore[arg-type]
+                    except Exception:
+                        lease_expires_at = None
+            except Exception:
+                pass
+
+            async with self._lock:
+                self._leader = False
+                self._lease_owner = lease_owner
+                self._lease_expires_at = lease_expires_at
+            return False
 
         acquired = False
         try:
@@ -607,7 +640,7 @@ class AsyncSchedulerService:
         db = getattr(self._state, "db", None)
         if db is not None and self._kv_key:
             try:
-                raw_db = await db.kv_get_json(self._kv_key)
+                raw_db = await db.global_kv_get_json(self._kv_key)
                 if raw_db:
                     return SchedulerConfig(**(raw_db or {}))
             except Exception:
@@ -621,9 +654,9 @@ class AsyncSchedulerService:
             raw = await asyncio.to_thread(read_json, str(p))
             cfg = SchedulerConfig(**(raw or {}))
             # Best-effort persist to DB KV.
-            if db is not None and self._kv_key:
+            if db is not None and self._kv_key and bool(self._leader_eligible):
                 try:
-                    await db.kv_set_json(self._kv_key, cfg.model_dump())
+                    await db.global_kv_set_json(self._kv_key, cfg.model_dump())
                 except Exception:
                     pass
             return cfg
@@ -635,7 +668,7 @@ class AsyncSchedulerService:
         try:
             if db is not None and self._kv_key:
                 try:
-                    await db.kv_set_json(self._kv_key, cfg.model_dump())
+                    await db.global_kv_set_json(self._kv_key, cfg.model_dump())
                 except Exception:
                     pass
             await asyncio.to_thread(write_json, self._config_path, cfg.model_dump())

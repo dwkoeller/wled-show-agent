@@ -376,6 +376,11 @@ Basic show-window automation (UI: Tools → Scheduler):
 - `POST /v1/scheduler/run_once`
 - `GET /v1/scheduler/events` – recent scheduler action history (SQL)
 
+Notes:
+
+- Scheduler config is stored in SQL (global KV) and mirrored to `DATA_DIR/show/scheduler.json`.
+- Fleet-wide scheduler leader election uses a DB lease; only agents whose `AGENT_ROLE` is in `SCHEDULER_LEADER_ROLES` can become leader (default: `tree,device`).
+
 ### Metadata (SQL)
 
 UI-facing metadata backed by SQL:
@@ -585,6 +590,8 @@ Optional (for FPP script export):
 Recommended env vars per agent:
 
 - `AGENT_ID` / `AGENT_NAME` / `AGENT_ROLE` – identify the agent (`tree`, `roofline1`, `roofline2`, etc.)
+- `AGENT_BASE_URL` – advertised in SQL heartbeats for DB-discovered targeting (defaults to `http://<AGENT_ID>:8088` in Docker)
+- `AGENT_TAGS` – optional comma-separated tags for UI filtering/grouping
 - `A2A_API_KEY` – recommended shared key (set the same on all agents)
 
 On the agent you want to use as the **fleet coordinator** (often the tree), set:

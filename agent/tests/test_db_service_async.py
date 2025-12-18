@@ -95,3 +95,23 @@ async def test_db_service_scheduler_events_retention(tmp_path) -> None:
 
     rows = await db.list_scheduler_events(limit=10, agent_id="agent1")
     assert len(rows) == 1
+
+
+@pytest.mark.anyio
+async def test_db_service_global_kv_roundtrip(tmp_path) -> None:
+    db1 = DatabaseService(
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        agent_id="agent1",
+    )
+    await db1.init()
+    await db1.global_kv_set_json("scheduler_config", {"enabled": True, "mode": "looks"})
+
+    db2 = DatabaseService(
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        agent_id="agent2",
+    )
+    await db2.init()
+    got = await db2.global_kv_get_json("scheduler_config")
+    assert got is not None
+    assert got["enabled"] is True
+    assert got["mode"] == "looks"

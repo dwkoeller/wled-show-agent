@@ -12,6 +12,7 @@ from sqlmodel import Session, SQLModel, select
 from sql_store import (
     AudioAnalysisRecord,
     AgentHeartbeatRecord,
+    GlobalKVRecord,
     JobRecord,
     KVRecord,
     LastAppliedRecord,
@@ -180,6 +181,29 @@ class DatabaseService:
                         }
                     )
                 return out
+
+        return await asyncio.to_thread(_op)
+
+    async def get_agent_heartbeat(self, *, agent_id: str) -> dict[str, Any] | None:
+        aid = str(agent_id).strip()
+        if not aid:
+            return None
+
+        def _op() -> dict[str, Any] | None:
+            with Session(self.engine) as session:
+                r = session.get(AgentHeartbeatRecord, aid)
+                if r is None:
+                    return None
+                return {
+                    "agent_id": r.agent_id,
+                    "updated_at": float(r.updated_at),
+                    "started_at": float(r.started_at or 0.0),
+                    "name": str(r.name or ""),
+                    "role": str(r.role or ""),
+                    "controller_kind": str(r.controller_kind or ""),
+                    "version": str(r.version or ""),
+                    "payload": dict(r.payload or {}),
+                }
 
         return await asyncio.to_thread(_op)
 
@@ -505,6 +529,16 @@ class DatabaseService:
 
         return await asyncio.to_thread(_op)
 
+    async def global_kv_get_json(self, key: str) -> dict[str, Any] | None:
+        k = str(key)
+
+        def _op() -> dict[str, Any] | None:
+            with Session(self.engine) as session:
+                rec = session.get(GlobalKVRecord, k)
+                return dict(rec.value or {}) if rec else None
+
+        return await asyncio.to_thread(_op)
+
     async def kv_set_json(self, key: str, value: dict[str, Any]) -> None:
         now = _now()
         k = str(key)
@@ -515,6 +549,27 @@ class DatabaseService:
                 if rec is None:
                     rec = KVRecord(
                         agent_id=self.agent_id,
+                        key=k,
+                        updated_at=now,
+                        value=dict(value or {}),
+                    )
+                    session.add(rec)
+                else:
+                    rec.updated_at = now
+                    rec.value = dict(value or {})
+                session.commit()
+
+        await asyncio.to_thread(_op)
+
+    async def global_kv_set_json(self, key: str, value: dict[str, Any]) -> None:
+        now = _now()
+        k = str(key)
+
+        def _op() -> None:
+            with Session(self.engine) as session:
+                rec = session.get(GlobalKVRecord, k)
+                if rec is None:
+                    rec = GlobalKVRecord(
                         key=k,
                         updated_at=now,
                         value=dict(value or {}),

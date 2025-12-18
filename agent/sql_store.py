@@ -74,6 +74,14 @@ class KVRecord(SQLModel, table=True):
     value: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
+class GlobalKVRecord(SQLModel, table=True):
+    __tablename__ = "kv_global"
+
+    key: str = Field(primary_key=True, max_length=256)
+    updated_at: float = Field(index=True)
+    value: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
 class PackIngestRecord(SQLModel, table=True):
     """
     Metadata for uploaded/unpacked zip packs under DATA_DIR.

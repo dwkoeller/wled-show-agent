@@ -172,6 +172,33 @@ async def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
             f"wsa_db_enabled {1 if getattr(st, 'db', None) is not None else 0}"
         )
 
+        # Fleet presence (SQL heartbeats).
+        db = getattr(st, "db", None)
+        if db is not None and hasattr(db, "list_agent_heartbeats"):
+            try:
+                now = time.time()
+                stale_after_s = 30.0
+                rows = await db.list_agent_heartbeats(limit=500)
+                online = 0
+                for r in rows:
+                    try:
+                        age = now - float((r or {}).get("updated_at") or 0.0)
+                        if age <= stale_after_s:
+                            online += 1
+                    except Exception:
+                        continue
+                lines.append("# HELP wsa_fleet_agents_total Agents in heartbeat table.")
+                lines.append("# TYPE wsa_fleet_agents_total gauge")
+                lines.append(f"wsa_fleet_agents_total {int(len(rows))}")
+
+                lines.append(
+                    "# HELP wsa_fleet_agents_online Agents with a fresh heartbeat."
+                )
+                lines.append("# TYPE wsa_fleet_agents_online gauge")
+                lines.append(f"wsa_fleet_agents_online {int(online)}")
+            except Exception:
+                pass
+
         # Jobs (in-memory) by status.
         jobs = getattr(st, "jobs", None)
         if jobs is not None and hasattr(jobs, "status_counts"):
@@ -196,11 +223,13 @@ async def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
             if isinstance(sst, dict):
                 running = 1 if bool(sst.get("running")) else 0
                 in_window = 1 if bool(sst.get("in_window")) else 0
+                leader = 1 if bool(sst.get("leader")) else 0
+                eligible = 1 if bool(sst.get("eligible")) else 0
                 last_action_at = sst.get("last_action_at")
                 last_error = sst.get("last_error")
 
                 lines.append(
-                    "# HELP wsa_scheduler_running Whether scheduler thread is running."
+                    "# HELP wsa_scheduler_running Whether scheduler is running."
                 )
                 lines.append("# TYPE wsa_scheduler_running gauge")
                 lines.append(f"wsa_scheduler_running {running}")
@@ -210,6 +239,45 @@ async def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
                 )
                 lines.append("# TYPE wsa_scheduler_in_window gauge")
                 lines.append(f"wsa_scheduler_in_window {in_window}")
+
+                lines.append(
+                    "# HELP wsa_scheduler_eligible Whether this node can be scheduler leader."
+                )
+                lines.append("# TYPE wsa_scheduler_eligible gauge")
+                lines.append(f"wsa_scheduler_eligible {eligible}")
+
+                lines.append("# HELP wsa_scheduler_leader Whether this node is leader.")
+                lines.append("# TYPE wsa_scheduler_leader gauge")
+                lines.append(f"wsa_scheduler_leader {leader}")
+
+                lease = sst.get("lease") if isinstance(sst.get("lease"), dict) else None
+                if lease:
+                    owner = str(lease.get("owner_id") or "").strip() or None
+                    expires_at = lease.get("expires_at")
+                    if owner:
+                        o = owner.replace('"', '\\"')
+                        lines.append(
+                            "# HELP wsa_scheduler_lease_owner_info Current scheduler lease owner."
+                        )
+                        lines.append("# TYPE wsa_scheduler_lease_owner_info gauge")
+                        lines.append(
+                            f'wsa_scheduler_lease_owner_info{{owner_id="{o}"}} 1'
+                        )
+                    if expires_at is not None:
+                        try:
+                            ts = float(expires_at)
+                        except Exception:
+                            ts = None
+                        if ts is not None:
+                            lines.append(
+                                "# HELP wsa_scheduler_lease_expires_timestamp_seconds Scheduler lease expiry time."
+                            )
+                            lines.append(
+                                "# TYPE wsa_scheduler_lease_expires_timestamp_seconds gauge"
+                            )
+                            lines.append(
+                                f"wsa_scheduler_lease_expires_timestamp_seconds {ts:.3f}"
+                            )
 
                 if last_action_at is not None:
                     try:

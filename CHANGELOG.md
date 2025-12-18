@@ -23,6 +23,8 @@ All notable changes to this project will be documented in this file.
 - Multipart file uploads: `POST /v1/files/upload` (strict allowlist) and UI upload progress/validation (Tools → Files).
 - Fleet presence in SQL: agent heartbeats + `GET /v1/fleet/status` (no fanout).
 - Scheduler observability: DB-backed scheduler event history (`GET /v1/scheduler/events`) and fleet-wide scheduler leader lease.
+- Scheduler config moved to a global SQL KV record (shared across fleet) and scheduler leader candidacy is role-gated via `SCHEDULER_LEADER_ROLES`.
+- Fleet heartbeats now include optional `base_url` + `tags` (used by `/v1/fleet/status` and DB-discovered explicit targets).
 - Scheduler event retention/maintenance via `SCHEDULER_EVENTS_MAX_ROWS`, `SCHEDULER_EVENTS_MAX_DAYS`, and `SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S`.
 - `X-Request-Id` middleware and structured request logging.
 - Docker Compose healthchecks for `api`/`ui` and fleet services.

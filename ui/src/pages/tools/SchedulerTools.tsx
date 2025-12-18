@@ -26,6 +26,8 @@ type SchedulerStatus = {
   ok: boolean;
   running: boolean;
   in_window: boolean;
+  eligible?: boolean;
+  leader_roles?: string[];
   leader?: boolean;
   lease?: {
     key?: string;
@@ -245,15 +247,22 @@ export function SchedulerTools() {
           <Typography variant="h6">Scheduler Status</Typography>
           <Typography variant="body2" color="text.secondary">
             Basic show-window automation. Config is stored under{" "}
+            <code>DATABASE_URL</code> (shared fleet config) and mirrored to{" "}
             <code>DATA_DIR/show/scheduler.json</code>.
           </Typography>
           {status ? (
             <Stack spacing={1} sx={{ mt: 2 }}>
               <Typography variant="body2">
                 Running: <code>{String(status.running)}</code> · In window:{" "}
-                <code>{String(status.in_window)}</code> · Leader:{" "}
+                <code>{String(status.in_window)}</code> · Eligible:{" "}
+                <code>{String(status.eligible ?? true)}</code> · Leader:{" "}
                 <code>{String(status.leader ?? false)}</code>
               </Typography>
+              {status.leader_roles?.length ? (
+                <Typography variant="body2">
+                  Leader roles: <code>{status.leader_roles.join(",")}</code>
+                </Typography>
+              ) : null}
               {status.lease?.owner_id ? (
                 <Typography variant="body2">
                   Lease owner: <code>{status.lease.owner_id}</code>

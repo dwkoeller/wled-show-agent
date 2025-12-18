@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends
@@ -129,14 +130,44 @@ async def _peer_supported_actions(
     return actions
 
 
-def _select_peers(state: AppState, targets: Optional[List[str]]) -> List[Any]:
+@dataclass(frozen=True)
+class _DiscoveredPeer:
+    name: str
+    base_url: str
+
+
+async def _select_peers(state: AppState, targets: Optional[List[str]]) -> List[Any]:
     peers = state.peers or {}
     if not targets:
         return list(peers.values())
     out: List[Any] = []
+    missing: List[str] = []
     for t in targets:
         if t in peers:
             out.append(peers[t])
+        else:
+            missing.append(str(t))
+
+    # If explicit targets include agent_ids not in A2A_PEERS, try DB discovery via heartbeats.
+    db = getattr(state, "db", None)
+    if db is not None:
+        for aid in missing:
+            try:
+                hb = await db.get_agent_heartbeat(agent_id=str(aid))
+            except Exception:
+                hb = None
+            if not hb:
+                continue
+            payload = hb.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            base_url = str(payload.get("base_url") or "").strip().rstrip("/")
+            if not base_url:
+                continue
+            if not (base_url.startswith("http://") or base_url.startswith("https://")):
+                continue
+            out.append(_DiscoveredPeer(name=str(aid), base_url=base_url))
+
     return out
 
 
@@ -194,10 +225,24 @@ async def fleet_status(
                 "role": None,
                 "controller_kind": None,
                 "version": None,
+                "base_url": None,
+                "tags": None,
             }
         updated_at = float(rec.get("updated_at") or 0.0)
         age_s = max(0.0, now - updated_at) if updated_at else None
         payload = dict(rec.get("payload") or {})
+        base_url = None
+        tags = None
+        try:
+            base_url = str(payload.get("base_url") or "").strip() or None
+        except Exception:
+            base_url = None
+        try:
+            raw_tags = payload.get("tags")
+            if isinstance(raw_tags, list):
+                tags = [str(x) for x in raw_tags if x is not None]
+        except Exception:
+            tags = None
         out: Dict[str, Any] = {
             "agent_id": aid,
             "configured": configured,
@@ -209,6 +254,8 @@ async def fleet_status(
             "role": rec.get("role"),
             "controller_kind": rec.get("controller_kind"),
             "version": rec.get("version"),
+            "base_url": base_url,
+            "tags": tags,
             "capabilities": (
                 payload.get("capabilities") if isinstance(payload, dict) else None
             ),
@@ -252,7 +299,7 @@ async def fleet_invoke(
         if req.timeout_s is not None
         else float(state.settings.a2a_http_timeout_s)
     )
-    peers = _select_peers(state, req.targets)
+    peers = await _select_peers(state, req.targets)
 
     results: Dict[str, Any] = {}
 
@@ -317,7 +364,7 @@ async def fleet_apply_random_look(
         },
     }
 
-    peers = _select_peers(state, req.targets)
+    peers = await _select_peers(state, req.targets)
     timeout_s = float(state.settings.a2a_http_timeout_s)
 
     if req.include_self:
@@ -399,7 +446,7 @@ async def fleet_stop_all(
         if req.timeout_s is not None
         else float(state.settings.a2a_http_timeout_s)
     )
-    peers = _select_peers(state, req.targets)
+    peers = await _select_peers(state, req.targets)
     results: Dict[str, Any] = {}
 
     if req.include_self:

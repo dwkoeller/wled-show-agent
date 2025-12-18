@@ -193,6 +193,10 @@ async def _startup_db_and_heartbeat() -> None:
                         "pixel_count": SETTINGS.pixel_count,
                     },
                 }
+                if SETTINGS.agent_base_url:
+                    payload["base_url"] = str(SETTINGS.agent_base_url)
+                if SETTINGS.agent_tags:
+                    payload["tags"] = [str(x) for x in SETTINGS.agent_tags]
                 try:
                     payload["status"] = {"ddp": STREAMER.status().__dict__}
                 except Exception:

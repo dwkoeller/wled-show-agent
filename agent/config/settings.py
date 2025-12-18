@@ -202,6 +202,9 @@ class Settings:
     agent_id: str
     agent_name: str
     agent_role: str
+    agent_base_url: str | None
+    agent_tags: tuple[str, ...]
+    scheduler_leader_roles: tuple[str, ...]
     a2a_api_key: str | None
     a2a_peers: tuple[str, ...]
     a2a_http_timeout_s: float
@@ -318,6 +321,19 @@ def load_settings() -> Settings:
     agent_id = _as_str(os.environ.get("AGENT_ID"), default="wled-agent")
     agent_name = _as_str(os.environ.get("AGENT_NAME"), default=agent_id)
     agent_role = _as_str(os.environ.get("AGENT_ROLE"), default="device")
+    agent_base_url = os.environ.get("AGENT_BASE_URL", "").strip() or None
+    if not agent_base_url:
+        # Default to docker-compose service DNS if we're in a container.
+        try:
+            if os.path.exists("/.dockerenv") and agent_id:
+                agent_base_url = f"http://{agent_id}:8088"
+        except Exception:
+            agent_base_url = None
+    agent_tags = _as_csv(os.environ.get("AGENT_TAGS"))
+
+    scheduler_leader_roles = _as_csv(os.environ.get("SCHEDULER_LEADER_ROLES"))
+    if not scheduler_leader_roles:
+        scheduler_leader_roles = ("tree", "device")
     a2a_api_key = os.environ.get("A2A_API_KEY", "").strip() or None
     a2a_peers = _as_csv(os.environ.get("A2A_PEERS"))
     a2a_http_timeout_s = max(0.5, _as_float(os.environ.get("A2A_HTTP_TIMEOUT_S"), 2.5))
@@ -438,6 +454,9 @@ def load_settings() -> Settings:
         agent_id=agent_id,
         agent_name=agent_name,
         agent_role=agent_role,
+        agent_base_url=agent_base_url,
+        agent_tags=agent_tags,
+        scheduler_leader_roles=scheduler_leader_roles,
         a2a_api_key=a2a_api_key,
         a2a_peers=a2a_peers,
         a2a_http_timeout_s=a2a_http_timeout_s,
