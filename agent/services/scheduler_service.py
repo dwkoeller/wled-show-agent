@@ -16,22 +16,30 @@ def _require_scheduler(state: AppState):
     return sched
 
 
-def scheduler_status(
-    _: None = Depends(require_a2a_auth),
-    state: AppState = Depends(get_state),
-) -> Dict[str, Any]:
-    return _require_scheduler(state).status()
-
-
-def scheduler_get_config(
+async def scheduler_status(
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     sched = _require_scheduler(state)
-    return {"ok": True, "config": sched.get_config().model_dump()}
+    if hasattr(sched, "status"):
+        return await sched.status()
+    raise HTTPException(status_code=500, detail="Scheduler does not support status()")
 
 
-def scheduler_set_config(
+async def scheduler_get_config(
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    sched = _require_scheduler(state)
+    if not hasattr(sched, "get_config"):
+        raise HTTPException(
+            status_code=500, detail="Scheduler does not support get_config()"
+        )
+    cfg = await sched.get_config()
+    return {"ok": True, "config": cfg.model_dump()}
+
+
+async def scheduler_set_config(
     cfg: SchedulerConfig,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
@@ -42,32 +50,46 @@ def scheduler_set_config(
         hhmm_to_minutes(cfg.end_hhmm)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    sched.set_config(cfg, persist=True)
+    if not hasattr(sched, "set_config"):
+        raise HTTPException(
+            status_code=500, detail="Scheduler does not support set_config()"
+        )
+    await sched.set_config(cfg, persist=True)
     return {"ok": True, "config": cfg.model_dump()}
 
 
-def scheduler_start(
+async def scheduler_start(
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     sched = _require_scheduler(state)
-    sched.start()
-    return sched.status()
+    if not hasattr(sched, "start"):
+        raise HTTPException(
+            status_code=500, detail="Scheduler does not support start()"
+        )
+    await sched.start()
+    return await sched.status()
 
 
-def scheduler_stop(
+async def scheduler_stop(
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     sched = _require_scheduler(state)
-    sched.stop()
-    return sched.status()
+    if not hasattr(sched, "stop"):
+        raise HTTPException(status_code=500, detail="Scheduler does not support stop()")
+    await sched.stop()
+    return await sched.status()
 
 
-def scheduler_run_once(
+async def scheduler_run_once(
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     sched = _require_scheduler(state)
-    sched.run_once()
-    return sched.status()
+    if not hasattr(sched, "run_once"):
+        raise HTTPException(
+            status_code=500, detail="Scheduler does not support run_once()"
+        )
+    await sched.run_once()
+    return await sched.status()

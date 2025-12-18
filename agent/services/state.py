@@ -21,12 +21,29 @@ class AppState:
     segment_ids: list[int] = field(default_factory=list)
     wled_cooldown: AsyncCooldown | None = None
 
+    # WLED clients/services.
+    wled: Any = None  # AsyncWLEDClient
+    wled_sync: Any = None  # AsyncWLEDClientSyncAdapter (thread use)
+    wled_mapper: Any = None  # WLEDMapper
+
+    # Domain services.
+    looks: Any = None  # LookService
+    importer: Any = None  # PresetImporter
+    ddp: Any = None  # DDPStreamer
+    sequences: Any = None  # SequenceService
+    fleet_sequences: Any = None  # FleetSequenceService
+    director: Any = None  # Optional OpenAI director
+
+    # Runtime state snapshot settings.
+    runtime_state_path: str = ""
+    kv_runtime_state_key: str = "runtime_state"
+
     # Optional async DB service (SQLModel / AsyncSession).
     db: Any = None
 
     # Runtime services (populated by startup).
-    jobs: Any = None
-    scheduler: Any = None
+    jobs: Any = None  # JobManager-like
+    scheduler: Any = None  # SchedulerService-like
     peers: dict[str, Any] | None = None
 
     # Shared async HTTP client for peer fanout.

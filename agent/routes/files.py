@@ -18,5 +18,10 @@ router.add_api_route(
     "/v1/files/upload", asyncify(files_service.files_upload), methods=["PUT"]
 )
 router.add_api_route(
+    "/v1/files/upload",
+    asyncify(files_service.files_upload_multipart),
+    methods=["POST"],
+)
+router.add_api_route(
     "/v1/files/delete", asyncify(files_service.files_delete), methods=["DELETE"]
 )

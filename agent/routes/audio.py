@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from services import app_state
-from utils.fastapi_utils import asyncify
+from services import audio_service
 
 
 router = APIRouter()
 
-router.add_api_route(
-    "/v1/audio/analyze", asyncify(app_state.audio_analyze), methods=["POST"]
-)
+router.add_api_route("/v1/audio/analyze", audio_service.audio_analyze, methods=["POST"])

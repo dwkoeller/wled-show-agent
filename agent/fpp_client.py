@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 import httpx
 import requests
+
+from utils.outbound_http import request_with_retry
 
 
 class FPPError(RuntimeError):
@@ -265,6 +268,12 @@ class AsyncFPPClient:
         self._client = client
         self.timeout_s = max(0.5, float(timeout_s))
         self.headers = dict(headers or {})
+        try:
+            self._target = (
+                urlparse(self.base_url).netloc or ""
+            ).strip() or self.base_url
+        except Exception:
+            self._target = self.base_url
 
     def _url(self, path: str) -> str:
         p = (path or "").strip()
@@ -289,15 +298,18 @@ class AsyncFPPClient:
             hdrs.update({str(k): str(v) for k, v in headers.items() if v is not None})
 
         try:
-            resp = await self._client.request(
+            resp = await request_with_retry(
+                client=self._client,
                 method=str(method).upper(),
                 url=url,
+                target_kind="fpp",
+                target=str(self._target),
+                timeout_s=self.timeout_s,
                 params=params,
-                json=json_body,
+                json_body=json_body,
                 data=data,
                 files=files,
                 headers=hdrs,
-                timeout=self.timeout_s,
             )
         except Exception as e:
             raise FPPError(f"FPP request failed: {e}")

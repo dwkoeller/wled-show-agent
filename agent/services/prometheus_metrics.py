@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+import inspect
 from typing import Dict, Iterable, Tuple
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -11,6 +12,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp
 
 from config.constants import APP_VERSION, SERVICE_NAME
+from utils.outbound_metrics import REGISTRY as OUTBOUND_REGISTRY
 
 
 _REQ_COUNT_KEY = Tuple[str, str, str]  # (method, route, status_code)
@@ -152,11 +154,14 @@ def metrics_endpoint() -> PlainTextResponse:
     )
 
 
-def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
+async def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
     """
     Prometheus exposition that includes request metrics plus basic scheduler/job gauges.
     """
-    lines: list[str] = [REGISTRY.render().rstrip("\n")]
+    lines: list[str] = [
+        REGISTRY.render().rstrip("\n"),
+        OUTBOUND_REGISTRY.render().rstrip("\n"),
+    ]
 
     st = getattr(request.app.state, "wsa", None)
     if st is not None:
@@ -184,7 +189,8 @@ def metrics_endpoint_with_state(request: Request) -> PlainTextResponse:
         sched = getattr(st, "scheduler", None)
         if sched is not None and hasattr(sched, "status"):
             try:
-                sst = sched.status()
+                sst_res = sched.status()
+                sst = await sst_res if inspect.isawaitable(sst_res) else sst_res
             except Exception:
                 sst = None
             if isinstance(sst, dict):

@@ -2,39 +2,34 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from services import app_state
 from services import fleet_service
-from utils.fastapi_utils import asyncify
+from services import fleet_sequences_service
 
 
 router = APIRouter()
 
-router.add_api_route(
-    "/v1/fleet/peers", asyncify(fleet_service.fleet_peers), methods=["GET"]
-)
-router.add_api_route(
-    "/v1/fleet/invoke", asyncify(fleet_service.fleet_invoke), methods=["POST"]
-)
+router.add_api_route("/v1/fleet/peers", fleet_service.fleet_peers, methods=["GET"])
+router.add_api_route("/v1/fleet/invoke", fleet_service.fleet_invoke, methods=["POST"])
 router.add_api_route(
     "/v1/fleet/apply_random_look",
-    asyncify(fleet_service.fleet_apply_random_look),
+    fleet_service.fleet_apply_random_look,
     methods=["POST"],
 )
 router.add_api_route(
-    "/v1/fleet/stop_all", asyncify(fleet_service.fleet_stop_all), methods=["POST"]
+    "/v1/fleet/stop_all", fleet_service.fleet_stop_all, methods=["POST"]
 )
 router.add_api_route(
     "/v1/fleet/sequences/status",
-    asyncify(app_state.fleet_sequences_status),
+    fleet_sequences_service.fleet_sequences_status,
     methods=["GET"],
 )
 router.add_api_route(
     "/v1/fleet/sequences/start",
-    asyncify(app_state.fleet_sequences_start),
+    fleet_sequences_service.fleet_sequences_start,
     methods=["POST"],
 )
 router.add_api_route(
     "/v1/fleet/sequences/stop",
-    asyncify(app_state.fleet_sequences_stop),
+    fleet_sequences_service.fleet_sequences_stop,
     methods=["POST"],
 )

@@ -3,11 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import Depends
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from config.constants import APP_VERSION, SERVICE_NAME
-from services import app_state as legacy
 from services.state import AppState, get_state
 
 
@@ -28,9 +26,10 @@ async def readyz(state: AppState = Depends(get_state)) -> Dict[str, Any]:
     ok = True
 
     # WLED reachability (best-effort; skip if not configured).
-    if legacy.WLED is not None:  # type: ignore[truthy-bool]
+    wled = getattr(state, "wled", None)
+    if wled is not None:
         try:
-            info = await run_in_threadpool(legacy.WLED.get_info)  # type: ignore[union-attr]
+            info = await wled.get_info()
             checks["wled"] = {"ok": True, "name": (info or {}).get("name")}
         except Exception as e:
             ok = False

@@ -70,6 +70,112 @@ class DatabaseService:
         except Exception as e:
             return DatabaseHealth(ok=False, detail=str(e))
 
+    # ---- Jobs persistence ----
+
+    async def list_jobs(self, *, limit: int) -> list[dict[str, Any]]:
+        lim = max(1, int(limit))
+        async with self.sessionmaker() as session:
+            stmt = (
+                select(JobRecord)
+                .where(JobRecord.agent_id == self.agent_id)
+                .order_by(JobRecord.created_at.desc())
+                .limit(lim)
+            )
+            rows = (await session.exec(stmt)).all()
+            return [dict(r.payload or {}) for r in rows]
+
+    async def get_job(self, job_id: str) -> dict[str, Any] | None:
+        async with self.sessionmaker() as session:
+            rec = await session.get(JobRecord, (self.agent_id, str(job_id)))
+            return dict(rec.payload or {}) if rec else None
+
+    async def upsert_job(self, job: dict[str, Any]) -> None:
+        now = _now()
+        jid = str(job.get("id") or "").strip()
+        if not jid:
+            return
+
+        kind = str(job.get("kind") or "")
+        status = str(job.get("status") or "")
+        created_at = float(job.get("created_at") or now)
+
+        started_at_raw = job.get("started_at")
+        started_at = float(started_at_raw) if started_at_raw is not None else None
+        finished_at_raw = job.get("finished_at")
+        finished_at = float(finished_at_raw) if finished_at_raw is not None else None
+
+        async with self.sessionmaker() as session:
+            rec = await session.get(JobRecord, (self.agent_id, jid))
+            if rec is None:
+                rec = JobRecord(
+                    agent_id=self.agent_id,
+                    id=jid,
+                    kind=kind,
+                    status=status,
+                    created_at=created_at,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    updated_at=now,
+                    payload=dict(job),
+                )
+                session.add(rec)
+            else:
+                rec.kind = kind
+                rec.status = status
+                rec.created_at = created_at
+                rec.started_at = started_at
+                rec.finished_at = finished_at
+                rec.updated_at = now
+                rec.payload = dict(job)
+            await session.commit()
+
+    async def mark_in_flight_failed(self, *, reason: str = "Server restarted") -> int:
+        now = _now()
+        updated = 0
+        async with self.sessionmaker() as session:
+            stmt = select(JobRecord).where(
+                JobRecord.agent_id == self.agent_id,
+                JobRecord.status.in_(("queued", "running")),
+            )
+            recs = (await session.exec(stmt)).all()
+            for rec in recs:
+                payload = dict(rec.payload or {})
+                payload["status"] = "failed"
+                payload["finished_at"] = payload.get("finished_at") or now
+                payload["error"] = payload.get("error") or str(reason)
+                rec.status = "failed"
+                rec.finished_at = float(payload["finished_at"] or now)
+                rec.updated_at = now
+                rec.payload = payload
+                updated += 1
+            await session.commit()
+        return updated
+
+    # ---- KV persistence ----
+
+    async def kv_get_json(self, key: str) -> dict[str, Any] | None:
+        async with self.sessionmaker() as session:
+            rec = await session.get(KVRecord, (self.agent_id, str(key)))
+            return dict(rec.value or {}) if rec else None
+
+    async def kv_set_json(self, key: str, value: dict[str, Any]) -> None:
+        now = _now()
+        k = str(key)
+        async with self.sessionmaker() as session:
+            rec = await session.get(KVRecord, (self.agent_id, k))
+            if rec is None:
+                rec = KVRecord(
+                    agent_id=self.agent_id,
+                    key=k,
+                    updated_at=now,
+                    value=dict(value or {}),
+                )
+                session.add(rec)
+            else:
+                rec.updated_at = now
+                rec.value = dict(value or {})
+            await session.commit()
+
     async def _ensure_schema_version(self, session: AsyncSession) -> None:
         now = _now()
         rec = await session.get(SchemaVersion, 1)

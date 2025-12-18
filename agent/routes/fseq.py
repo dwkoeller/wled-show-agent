@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from services import app_state
-from utils.fastapi_utils import asyncify
+from services import fseq_service
 
 
 router = APIRouter()
 
-router.add_api_route(
-    "/v1/fseq/export", asyncify(app_state.fseq_export), methods=["POST"]
-)
+router.add_api_route("/v1/fseq/export", fseq_service.fseq_export, methods=["POST"])

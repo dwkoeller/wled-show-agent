@@ -3,18 +3,18 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import Depends
-from fastapi.concurrency import run_in_threadpool
 
 from models.requests import (
     FleetApplyRandomLookRequest,
     FleetInvokeRequest,
     FleetStopAllRequest,
 )
-from services import app_state as legacy
+from services import a2a_service
 from services.auth_service import require_a2a_auth
+from services.runtime_state_service import persist_runtime_state
 from services.state import AppState, get_state
+from utils.outbound_http import request_with_retry
 
 
 def _peer_headers(state: AppState) -> Dict[str, str]:
@@ -35,10 +35,14 @@ async def _peer_get_json(
     if client is None:
         return {"ok": False, "error": "peer_http is not initialized"}
     try:
-        resp = await client.get(
-            url,
+        resp = await request_with_retry(
+            client=client,
+            method="GET",
+            url=url,
+            target_kind="peer",
+            target=str(getattr(peer, "name", "") or base_url),
+            timeout_s=float(timeout_s),
             headers=_peer_headers(state),
-            timeout=float(timeout_s),
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -74,11 +78,15 @@ async def _peer_post_json(
     if client is None:
         return {"ok": False, "error": "peer_http is not initialized"}
     try:
-        resp = await client.post(
-            url,
-            json=payload,
+        resp = await request_with_retry(
+            client=client,
+            method="POST",
+            url=url,
+            target_kind="peer",
+            target=str(getattr(peer, "name", "") or base_url),
+            timeout_s=float(timeout_s),
             headers=_peer_headers(state),
-            timeout=float(timeout_s),
+            json_body=payload,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -163,12 +171,12 @@ async def fleet_invoke(
     results: Dict[str, Any] = {}
 
     if req.include_self:
-        fn = legacy._A2A_ACTIONS.get(action)  # type: ignore[attr-defined]
+        fn = a2a_service.actions().get(action)
         if fn is None:
             results["self"] = {"ok": False, "error": f"Unknown action '{action}'"}
         else:
             try:
-                res = await run_in_threadpool(fn, dict(req.params or {}))
+                res = await fn(state, dict(req.params or {}))
                 results["self"] = {"ok": True, "result": res}
             except Exception as e:
                 results["self"] = {"ok": False, "error": str(e)}
@@ -199,8 +207,11 @@ async def fleet_apply_random_look(
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     # Pick on this agent, then broadcast the same look_spec to peers so devices match.
-    pack, row = await run_in_threadpool(
-        legacy.LOOKS.choose_random,  # type: ignore[union-attr]
+    looks = getattr(state, "looks", None)
+    if looks is None:
+        raise RuntimeError("Look service not initialized")
+    pack, row = await asyncio.to_thread(
+        looks.choose_random,
         theme=req.theme,
         pack_file=req.pack_file,
         seed=req.seed,
@@ -225,11 +236,10 @@ async def fleet_apply_random_look(
 
     if req.include_self:
         try:
-            await run_in_threadpool(legacy.COOLDOWN.wait)  # type: ignore[union-attr]
-            res = await run_in_threadpool(
-                legacy.LOOKS.apply_look,  # type: ignore[union-attr]
-                row,
-                brightness_override=bri,
+            if state.wled_cooldown is not None:
+                await state.wled_cooldown.wait()
+            res = await asyncio.to_thread(
+                looks.apply_look, row, brightness_override=bri
             )
             results["self"] = {"ok": True, "result": res}
         except Exception as e:
@@ -308,7 +318,7 @@ async def fleet_stop_all(
 
     if req.include_self:
         try:
-            res = await run_in_threadpool(legacy._a2a_action_stop_all, {})  # type: ignore[attr-defined]
+            res = await a2a_service.actions()["stop_all"](state, {})
             results["self"] = {"ok": True, "result": res}
         except Exception as e:
             results["self"] = {"ok": False, "error": str(e)}
@@ -330,5 +340,8 @@ async def fleet_stop_all(
 
         await asyncio.gather(*[_call(p) for p in peers])
 
-    await run_in_threadpool(legacy._persist_runtime_state, "fleet_stop_all", {"targets": req.targets})  # type: ignore[attr-defined]
+    try:
+        await persist_runtime_state(state, "fleet_stop_all", {"targets": req.targets})
+    except Exception:
+        pass
     return {"ok": True, "action": "stop_all", "results": results}

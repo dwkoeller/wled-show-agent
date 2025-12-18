@@ -16,6 +16,22 @@ This repo is designed for **LAN use only**.
 
 ---
 
+## Table of contents
+
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Quick start (Docker)](#quick-start-docker)
+- [Configuration (.env)](#configuration-env)
+- [Core endpoints](#core-endpoints)
+- [Usage examples](#usage-examples)
+- [Multi-controller setup (tree + rooflines)](#multi-controller-setup-tree--rooflines)
+- [Data files](#data-files)
+- [Safety notes](#safety-notes)
+- [HTTPS on LAN (recommended for mobile voice + secure cookies)](#https-on-lan-recommended-for-mobile-voice--secure-cookies)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
+
 ## How it works
 
 Think of it as two planes:
@@ -179,19 +195,19 @@ Notes:
 - Generate a JWT secret:
 
 ```bash
-python -c 'import secrets; print(secrets.token_urlsafe(32))'
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
 - Optional: generate a PBKDF2 password hash for `AUTH_PASSWORD`:
 
 ```bash
-python -c 'import sys; sys.path.insert(0,"agent"); from auth import hash_password_pbkdf2; print(hash_password_pbkdf2("changeme"))'
+python3 -c 'import sys; sys.path.insert(0,"agent"); from auth import hash_password_pbkdf2; print(hash_password_pbkdf2("changeme"))'
 ```
 
 - Optional: generate a TOTP secret for `AUTH_TOTP_SECRET`:
 
 ```bash
-python -c 'import sys; sys.path.insert(0,"agent"); from auth import totp_generate_secret; print(totp_generate_secret())'
+python3 -c 'import sys; sys.path.insert(0,"agent"); from auth import totp_generate_secret; print(totp_generate_secret())'
 ```
 
 ### Falcon Player (FPP) (optional)
@@ -336,7 +352,9 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 
 - `GET /v1/files/list` – list files under `DATA_DIR`
 - `GET /v1/files/download` – download a file under `DATA_DIR`
-- `PUT /v1/files/upload?path=...` – upload raw bytes to a file under `DATA_DIR` (UI: Tools → Files)
+- `POST /v1/files/upload` – multipart upload with strict allowlist (UI: Tools → Files)
+  - Allowed dirs/types: `audio/` and `music/` (`.wav/.mp3/.ogg/.flac/.m4a/.aac`), `xlights/` (`.xsq`), `sequences/` (`.json`)
+- `PUT /v1/files/upload?path=...` – upload raw bytes to an arbitrary file under `DATA_DIR` (advanced / no multipart dependencies)
 - `DELETE /v1/files/delete?path=...` – delete a file under `DATA_DIR`
 
 ### Pack ingestion (UI uses this)
@@ -831,6 +849,13 @@ Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
 - Confirm `WLED_TREE_URL` is correct and reachable from the container host.
 - If using Docker in an LXC, confirm the container can reach your VLAN/subnet.
 
+**UI can’t reach the API (local dev):**
+
+- Run the backend on `http://localhost:8088` and the UI dev server on `http://localhost:5173/ui/`.
+- The UI dev server proxies `/v1/*` to the backend; if you change backend ports, update `ui/vite.config.ts`.
+- If you’re testing from a phone on your LAN, run Vite with `npm run dev -- --host 0.0.0.0` and open `http://<your-lan-ip>:5173/ui/`.
+- If you bypass the proxy and hit the API cross-origin, set `CORS_ALLOW_ORIGINS` / `CORS_ALLOW_ORIGIN_REGEX` in your backend env (see `.env.example`).
+
 **DDP patterns don’t show:**
 
 - Confirm the WLED device is the same IP as `DDP_HOST`.
@@ -844,6 +869,24 @@ Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
 
 ## Development
 
+Backend dev server (FastAPI):
+
+```bash
+cd agent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Required for WLED mode:
+export WLED_TREE_URL=http://172.16.200.50
+
+python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8088
+# API docs: http://localhost:8088/docs
+```
+
+Note: the backend does not serve the production UI by itself; in Docker, the `ui` container serves `/ui/*`
+and proxies `/v1/*` to the API. For local dev, use the Vite UI dev server below.
+
 UI dev server (mobile-friendly React app):
 
 ```bash
@@ -851,6 +894,10 @@ cd ui
 npm install
 npm run dev
 # open http://localhost:5173/ui/ (Vite proxies /v1 to http://localhost:8088)
+
+# For phone/LAN testing:
+# npm run dev -- --host 0.0.0.0
+# open http://<your-lan-ip>:5173/ui/
 ```
 
 If you run the UI dev server without proxying `/v1` (different origin), set API CORS config (see `.env.example`).

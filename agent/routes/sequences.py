@@ -2,26 +2,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from services import app_state
-from utils.fastapi_utils import asyncify
+from services import sequences_service
 
 
 router = APIRouter()
 
 router.add_api_route(
-    "/v1/sequences/list", asyncify(app_state.sequences_list), methods=["GET"]
+    "/v1/sequences/list", sequences_service.sequences_list, methods=["GET"]
 )
 router.add_api_route(
     "/v1/sequences/generate",
-    asyncify(app_state.sequences_generate),
+    sequences_service.sequences_generate,
     methods=["POST"],
 )
 router.add_api_route(
-    "/v1/sequences/status", asyncify(app_state.sequences_status), methods=["GET"]
+    "/v1/sequences/status", sequences_service.sequences_status, methods=["GET"]
 )
 router.add_api_route(
-    "/v1/sequences/play", asyncify(app_state.sequences_play), methods=["POST"]
+    "/v1/sequences/play", sequences_service.sequences_play, methods=["POST"]
 )
 router.add_api_route(
-    "/v1/sequences/stop", asyncify(app_state.sequences_stop), methods=["POST"]
+    "/v1/sequences/stop", sequences_service.sequences_stop, methods=["POST"]
 )

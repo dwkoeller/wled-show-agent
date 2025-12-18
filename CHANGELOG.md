@@ -16,8 +16,11 @@ All notable changes to this project will be documented in this file.
 - Readiness endpoint `GET /readyz` (checks WLED reachability + DB).
 - SQL-backed metadata endpoints for UI: `GET /v1/meta/packs`, `/v1/meta/sequences`, `/v1/meta/audio_analyses`, `/v1/meta/last_applied`.
 - Metadata reconciler: `POST /v1/meta/reconcile` and `DB_RECONCILE_ON_STARTUP`.
+- Async “core loop”: async job manager + async scheduler execution with SSE job streaming (`GET /v1/jobs/{job_id}/stream`) and cancelation (`POST /v1/jobs/{job_id}/cancel`).
 - Job history retention/maintenance via `JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, and `JOB_HISTORY_MAINTENANCE_INTERVAL_S`.
 - Optional Prometheus scrape auth settings: `METRICS_PUBLIC`, `METRICS_SCRAPE_TOKEN`, `METRICS_SCRAPE_HEADER`.
+- Outbound-call hardening: retries/backoff + per-target timeouts, plus Prometheus outbound failure/latency counters for WLED/FPP/peer requests.
+- Multipart file uploads: `POST /v1/files/upload` (strict allowlist) and UI upload progress/validation (Tools → Files).
 - `X-Request-Id` middleware and structured request logging.
 - Docker Compose healthchecks for `api`/`ui` and fleet services.
 

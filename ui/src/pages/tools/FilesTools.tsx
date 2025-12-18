@@ -11,6 +11,7 @@ import {
   FormControl,
   FormControlLabel,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   Stack,
@@ -32,6 +33,20 @@ const commonDirs = [
   { label: "show/", value: "show" },
 ];
 
+const uploadDirs = [
+  { label: "audio/", value: "audio" },
+  { label: "music/", value: "music" },
+  { label: "xlights/", value: "xlights" },
+  { label: "sequences/", value: "sequences" },
+];
+
+const uploadAllowExts: Record<string, string[]> = {
+  audio: [".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac"],
+  music: [".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac"],
+  xlights: [".xsq"],
+  sequences: [".json"],
+};
+
 type UploadResult = { ok?: boolean; path?: string; bytes?: number };
 
 export function FilesTools() {
@@ -43,18 +58,36 @@ export function FilesTools() {
   const [glob, setGlob] = useState("*");
   const [recursive, setRecursive] = useState(true);
 
-  const [uploadDir, setUploadDir] = useState("music");
+  const [uploadDir, setUploadDir] = useState("audio");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadName, setUploadName] = useState("");
   const [overwrite, setOverwrite] = useState(false);
   const [lastUpload, setLastUpload] = useState<UploadResult | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const uploadPath = useMemo(() => {
-    const name = uploadName.trim();
+    const name = uploadName.trim() || uploadFile?.name || "";
     if (!name) return "";
     const d = uploadDir.trim();
     return d ? `${d.replace(/\/+$/, "")}/${name.replace(/^\/+/, "")}` : name;
-  }, [uploadDir, uploadName]);
+  }, [uploadDir, uploadFile, uploadName]);
+
+  const uploadExt = useMemo(() => {
+    const n = uploadName.trim() || uploadFile?.name || "";
+    const m = n.toLowerCase().match(/\.[a-z0-9]+$/);
+    return m ? m[0] : "";
+  }, [uploadName, uploadFile]);
+
+  const uploadValidationError = useMemo(() => {
+    const name = (uploadName.trim() || uploadFile?.name || "").trim();
+    if (!name) return "Choose a file and destination filename.";
+    const allowed = uploadAllowExts[uploadDir] ?? [];
+    if (!uploadExt) return "Filename must include an extension.";
+    if (allowed.length && !allowed.includes(uploadExt)) {
+      return `File type ${uploadExt} is not allowed for ${uploadDir}/ (allowed: ${allowed.join(", ")})`;
+    }
+    return null;
+  }, [uploadDir, uploadExt, uploadFile, uploadName]);
 
   const refresh = async () => {
     setError(null);
@@ -85,48 +118,70 @@ export function FilesTools() {
 
   const doUpload = async () => {
     if (!uploadFile) return;
-    if (!uploadPath.trim()) {
-      setError("Choose a destination filename.");
+    if (uploadValidationError) {
+      setError(uploadValidationError);
       return;
     }
     setBusy(true);
     setError(null);
     setLastUpload(null);
+    setUploadProgress(0);
     try {
-      const url = new URL("/v1/files/upload", window.location.origin);
-      url.searchParams.set("path", uploadPath);
-      if (overwrite) url.searchParams.set("overwrite", "true");
+      const name = uploadName.trim() || uploadFile.name;
 
-      const resp = await fetch(url.toString(), {
-        method: "PUT",
-        credentials: "include",
-        headers: {
-          "Content-Type": uploadFile.type || "application/octet-stream",
-        },
-        body: uploadFile,
+      const res = await new Promise<UploadResult>((resolve, reject) => {
+        const form = new FormData();
+        form.append("file", uploadFile, uploadFile.name);
+        form.append("dir", uploadDir);
+        form.append("filename", name);
+        form.append("overwrite", overwrite ? "true" : "false");
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/v1/files/upload");
+        xhr.withCredentials = true;
+
+        xhr.upload.onprogress = (ev) => {
+          if (!ev.lengthComputable || ev.total <= 0) {
+            setUploadProgress(null);
+            return;
+          }
+          setUploadProgress(Math.round((ev.loaded / ev.total) * 100));
+        };
+
+        xhr.onerror = () => reject(new Error("Upload failed (network error)."));
+        xhr.onload = () => {
+          const text = xhr.responseText ?? "";
+          let body: any = null;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text;
+          }
+
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(body as UploadResult);
+            return;
+          }
+
+          const msg =
+            (body &&
+              typeof body === "object" &&
+              (body.detail || body.error || body.message)) ||
+            (typeof body === "string" && body.trim()) ||
+            `HTTP ${xhr.status}`;
+          reject(new Error(String(msg)));
+        };
+
+        xhr.send(form);
       });
 
-      const contentType = resp.headers.get("content-type") ?? "";
-      const body = contentType.includes("application/json")
-        ? await resp.json().catch(() => null)
-        : await resp.text().catch(() => "");
-
-      if (!resp.ok) {
-        const msg =
-          (body &&
-            typeof body === "object" &&
-            (body.detail || body.error || body.message)) ||
-          (typeof body === "string" && body.trim()) ||
-          `HTTP ${resp.status}`;
-        throw new Error(String(msg));
-      }
-
-      setLastUpload(body as UploadResult);
+      setLastUpload(res);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+      setUploadProgress(null);
     }
   };
 
@@ -201,7 +256,7 @@ export function FilesTools() {
                 onChange={(e) => setUploadDir(String(e.target.value))}
                 disabled={busy}
               >
-                {commonDirs.map((d) => (
+                {uploadDirs.map((d) => (
                   <MenuItem key={d.value} value={d.value}>
                     {d.label}
                   </MenuItem>
@@ -214,7 +269,14 @@ export function FilesTools() {
               value={uploadName}
               onChange={(e) => setUploadName(e.target.value)}
               disabled={busy}
-              helperText={uploadPath ? `Will write: ${uploadPath}` : undefined}
+              error={!!uploadValidationError}
+              helperText={
+                uploadValidationError
+                  ? uploadValidationError
+                  : uploadPath
+                    ? `Will write: ${uploadPath}`
+                    : undefined
+              }
             />
 
             <FormControlLabel
@@ -226,6 +288,18 @@ export function FilesTools() {
               }
               label="Overwrite if exists"
             />
+
+            {uploadProgress != null ? (
+              <Stack spacing={0.5}>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.max(0, Math.min(100, uploadProgress))}
+                />
+                <Typography variant="body2" color="text.secondary">
+                  Uploading… {uploadProgress}%
+                </Typography>
+              </Stack>
+            ) : null}
           </Stack>
         </CardContent>
         <CardActions>
@@ -233,7 +307,7 @@ export function FilesTools() {
             variant="contained"
             startIcon={<UploadFileIcon />}
             onClick={doUpload}
-            disabled={busy || !uploadFile || !uploadPath.trim()}
+            disabled={busy || !uploadFile || !!uploadValidationError}
           >
             Upload
           </Button>
