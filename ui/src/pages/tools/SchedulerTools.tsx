@@ -26,11 +26,30 @@ type SchedulerStatus = {
   ok: boolean;
   running: boolean;
   in_window: boolean;
+  leader?: boolean;
+  lease?: {
+    key?: string;
+    owner_id?: string | null;
+    expires_at?: number | null;
+    ttl_s?: number | null;
+  };
   last_action_at: number | null;
   last_action: string | null;
   last_error: string | null;
   next_action_in_s: number | null;
   config: any;
+};
+
+type SchedulerEvent = {
+  id: number | null;
+  agent_id: string;
+  created_at: number;
+  action: string;
+  scope: string;
+  reason: string;
+  ok: boolean;
+  duration_s: number;
+  error: string | null;
 };
 
 function parseTargets(raw: string): string[] | null {
@@ -54,6 +73,7 @@ export function SchedulerTools() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<SchedulerStatus | null>(null);
+  const [events, setEvents] = useState<SchedulerEvent[]>([]);
 
   const [sequences, setSequences] = useState<string[]>([]);
 
@@ -90,6 +110,15 @@ export function SchedulerTools() {
         method: "GET",
       });
       setStatus(st);
+      try {
+        const ev = await api<{ ok: boolean; events: SchedulerEvent[] }>(
+          "/v1/scheduler/events?limit=20",
+          { method: "GET" },
+        );
+        setEvents(ev.events || []);
+      } catch {
+        setEvents([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -222,8 +251,14 @@ export function SchedulerTools() {
             <Stack spacing={1} sx={{ mt: 2 }}>
               <Typography variant="body2">
                 Running: <code>{String(status.running)}</code> · In window:{" "}
-                <code>{String(status.in_window)}</code>
+                <code>{String(status.in_window)}</code> · Leader:{" "}
+                <code>{String(status.leader ?? false)}</code>
               </Typography>
+              {status.lease?.owner_id ? (
+                <Typography variant="body2">
+                  Lease owner: <code>{status.lease.owner_id}</code>
+                </Typography>
+              ) : null}
               <Typography variant="body2">
                 Last action: <code>{status.last_action ?? "—"}</code> at{" "}
                 <code>{fmtTs(status.last_action_at)}</code>
@@ -263,6 +298,41 @@ export function SchedulerTools() {
           </Button>
           <Button startIcon={<BoltIcon />} onClick={runOnce} disabled={busy}>
             Run once
+          </Button>
+        </CardActions>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Typography variant="h6">Recent events</Typography>
+          {events.length === 0 ? (
+            <Typography variant="body2" sx={{ mt: 1 }} color="text.secondary">
+              No scheduler events yet.
+            </Typography>
+          ) : (
+            <Stack spacing={1} sx={{ mt: 2 }}>
+              {events.map((ev) => (
+                <Typography
+                  key={`${ev.id ?? "x"}-${ev.created_at}-${ev.action}`}
+                  variant="body2"
+                >
+                  <code>{fmtTs(ev.created_at)}</code> · <code>{ev.action}</code>{" "}
+                  (<code>{ev.scope}</code>) ·{" "}
+                  <code>{ev.ok ? "ok" : "failed"}</code>
+                  {ev.error ? (
+                    <>
+                      {" "}
+                      · <code>{ev.error}</code>
+                    </>
+                  ) : null}
+                </Typography>
+              ))}
+            </Stack>
+          )}
+        </CardContent>
+        <CardActions>
+          <Button startIcon={<RefreshIcon />} onClick={refresh} disabled={busy}>
+            Refresh
           </Button>
         </CardActions>
       </Card>

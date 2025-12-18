@@ -5,6 +5,7 @@ from config import load_settings
 
 def test_config_parses_fpp_headers_json(monkeypatch) -> None:
     monkeypatch.setenv("WLED_TREE_URL", "http://172.16.200.50")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("FPP_BASE_URL", "http://172.16.200.20")
     monkeypatch.setenv(
         "FPP_HEADERS_JSON", '{"Authorization":"Bearer token","X-Test":"1"}'

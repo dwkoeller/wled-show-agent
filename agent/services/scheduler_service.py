@@ -93,3 +93,19 @@ async def scheduler_run_once(
         )
     await sched.run_once()
     return await sched.status()
+
+
+async def scheduler_events(
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+    limit: int = 200,
+    agent_id: str | None = None,
+) -> Dict[str, Any]:
+    db = getattr(state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        events = await db.list_scheduler_events(limit=int(limit), agent_id=agent_id)
+        return {"ok": True, "events": events}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

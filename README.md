@@ -71,10 +71,11 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-This starts 2 containers:
+This starts 3 containers:
 
 - `ui` (Nginx) serves `/ui/*` and proxies `/v1/*` + `/docs` to the API
 - `api` (FastAPI) runs the agent backend
+- `db` (MySQL) stores job history + small UI state (required)
 
 4. Open the API docs (Swagger UI)
 
@@ -218,12 +219,12 @@ If you want the agent to control Falcon Player (playlist start/stop, event trigg
 - `FPP_HTTP_TIMEOUT_S` – HTTP timeout for FPP requests
 - `FPP_HEADERS_JSON` – optional extra headers (JSON object) for auth (example: `{"Authorization":"Bearer <token>"}`)
 
-### Database (optional)
+### Database (required)
 
-- `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). When set, job history + small UI state (scheduler config and `runtime_state`) are also persisted in SQL.
-- With the included MySQL container: run `docker compose --profile db up -d --build` and set `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa`.
-- Retention (SQL only): `JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`.
-- Optional startup reconcile (SQL only): `DB_RECONCILE_ON_STARTUP=true` to scan `DATA_DIR` and backfill metadata tables.
+- `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). This service will not start without it.
+- For Docker Compose, the included `db` service is enabled by default; `.env.example` uses `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa`.
+- Retention (SQL): job history (`JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`) and scheduler events (`SCHEDULER_EVENTS_MAX_ROWS`, `SCHEDULER_EVENTS_MAX_DAYS`, `SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S`).
+- Optional startup reconcile: `DB_RECONCILE_ON_STARTUP=true` to scan `DATA_DIR` and backfill metadata tables.
 
 ### AI capability + cost (estimates)
 
@@ -319,6 +320,7 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 - `GET /v1/a2a/card` – agent metadata + supported actions
 - `POST /v1/a2a/invoke` – invoke an action on this agent
 - `GET /v1/fleet/peers` – list configured peer agents
+- `GET /v1/fleet/status` – fleet status from SQL heartbeats (no fanout)
 - `POST /v1/fleet/apply_random_look` – pick a look on this agent and apply the same look spec to peers
 - `POST /v1/fleet/invoke` – invoke any A2A action on peers (and optionally self)
 - `POST /v1/fleet/stop_all` – stop sequences + DDP across the fleet
@@ -346,7 +348,7 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 - `GET /v1/jobs` – list recent jobs
 - `GET /v1/jobs/stream` – Server-Sent Events (SSE) stream of job updates
 - `POST /v1/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
-- Jobs are persisted under `DATA_DIR/jobs/jobs.json` and (optionally) to SQL when `DATABASE_URL` is set.
+- Jobs are persisted to SQL. A rolling JSON snapshot is also written under `DATA_DIR/jobs/jobs.json`.
 
 ### File helpers (UI uses this)
 
@@ -372,10 +374,11 @@ Basic show-window automation (UI: Tools → Scheduler):
 - `POST /v1/scheduler/start`
 - `POST /v1/scheduler/stop`
 - `POST /v1/scheduler/run_once`
+- `GET /v1/scheduler/events` – recent scheduler action history (SQL)
 
-### Metadata (SQL only)
+### Metadata (SQL)
 
-UI-facing metadata backed by SQL (when `DATABASE_URL` is set):
+UI-facing metadata backed by SQL:
 
 - `GET /v1/meta/packs`
 - `GET /v1/meta/sequences`
@@ -795,7 +798,7 @@ curl -sS http://localhost:8088/v1/fleet/stop_all \
 - `./data/show/scheduler.json` – scheduler config (for the UI)
 - `./data/state/runtime_state.json` – last-known runtime state snapshot
 
-If you set `DATABASE_URL`, the agent also persists job history + these small state files into SQL (and will read from SQL when available).
+The agent persists job history + these small state files into SQL (and also writes best-effort JSON snapshots under `DATA_DIR`).
 
 Safe to delete any time.
 
@@ -879,6 +882,9 @@ pip install -r requirements.txt
 
 # Required for WLED mode:
 export WLED_TREE_URL=http://172.16.200.50
+
+# Required: SQL database (SQLite is fine for local dev)
+export DATABASE_URL=sqlite:////tmp/wsa.sqlite
 
 python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8088
 # API docs: http://localhost:8088/docs

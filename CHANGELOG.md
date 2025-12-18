@@ -6,9 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Optional MySQL persistence (SQLModel) behind `DATABASE_URL` for job history and small UI state (scheduler config + runtime snapshot).
+- SQL persistence (SQLModel) via `DATABASE_URL` (MySQL recommended; SQLite supported) for job history and small UI state (scheduler config + runtime snapshot).
 - Docker Compose `db` profile with a MySQL service (`docker-compose.yml`, `docker-compose.fleet.yml`).
-- Async DB drivers support (`aiomysql`/`aiosqlite`).
+- DB service uses a sync engine + `asyncio.to_thread` (avoids SQLAlchemy AsyncEngine/`greenlet` issues on Python 3.14).
 - Backend refactor: app factory + lifespan wiring (`agent/app_factory.py`), routers split into `agent/routes/*`, and main backend module moved to `agent/services/app_state.py`.
 - Pack ingestion: `PUT /v1/packs/ingest` (zip upload + unpack) and UI tab (Tools → Packs).
 - Prometheus endpoint `GET /metrics` plus request/latency middleware.
@@ -21,8 +21,15 @@ All notable changes to this project will be documented in this file.
 - Optional Prometheus scrape auth settings: `METRICS_PUBLIC`, `METRICS_SCRAPE_TOKEN`, `METRICS_SCRAPE_HEADER`.
 - Outbound-call hardening: retries/backoff + per-target timeouts, plus Prometheus outbound failure/latency counters for WLED/FPP/peer requests.
 - Multipart file uploads: `POST /v1/files/upload` (strict allowlist) and UI upload progress/validation (Tools → Files).
+- Fleet presence in SQL: agent heartbeats + `GET /v1/fleet/status` (no fanout).
+- Scheduler observability: DB-backed scheduler event history (`GET /v1/scheduler/events`) and fleet-wide scheduler leader lease.
+- Scheduler event retention/maintenance via `SCHEDULER_EVENTS_MAX_ROWS`, `SCHEDULER_EVENTS_MAX_DAYS`, and `SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S`.
 - `X-Request-Id` middleware and structured request logging.
 - Docker Compose healthchecks for `api`/`ui` and fleet services.
+
+### Changed
+
+- `DATABASE_URL` is required (API fails fast if the DB is unavailable).
 
 ### Fixed
 

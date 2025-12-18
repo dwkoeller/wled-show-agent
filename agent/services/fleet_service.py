@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends
@@ -152,6 +153,91 @@ async def fleet_peers(
             {"name": getattr(p, "name", ""), "base_url": getattr(p, "base_url", "")}
             for p in peers.values()
         ],
+    }
+
+
+async def fleet_status(
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+    stale_after_s: float = 30.0,
+    limit: int = 200,
+    include_payload: bool = False,
+) -> Dict[str, Any]:
+    """
+    Fleet status derived from SQL heartbeats (no fanout).
+    """
+    db = getattr(state, "db", None)
+    if db is None:
+        return {"ok": False, "error": "Database not initialized"}
+
+    now = time.time()
+    stale = max(1.0, float(stale_after_s))
+
+    rows = await db.list_agent_heartbeats(limit=max(1, int(limit)))
+    by_id: Dict[str, Dict[str, Any]] = {str(r.get("agent_id")): dict(r) for r in rows}
+
+    peers = state.peers or {}
+    configured_ids = {str(state.settings.agent_id)} | {str(k) for k in peers.keys()}
+
+    def _format(
+        aid: str, rec: Dict[str, Any] | None, *, configured: bool
+    ) -> Dict[str, Any]:
+        if not rec:
+            return {
+                "agent_id": aid,
+                "configured": configured,
+                "online": False,
+                "age_s": None,
+                "updated_at": None,
+                "started_at": None,
+                "name": None,
+                "role": None,
+                "controller_kind": None,
+                "version": None,
+            }
+        updated_at = float(rec.get("updated_at") or 0.0)
+        age_s = max(0.0, now - updated_at) if updated_at else None
+        payload = dict(rec.get("payload") or {})
+        out: Dict[str, Any] = {
+            "agent_id": aid,
+            "configured": configured,
+            "online": bool(age_s is not None and age_s <= stale),
+            "age_s": age_s,
+            "updated_at": updated_at or None,
+            "started_at": float(rec.get("started_at") or 0.0) or None,
+            "name": rec.get("name"),
+            "role": rec.get("role"),
+            "controller_kind": rec.get("controller_kind"),
+            "version": rec.get("version"),
+            "capabilities": (
+                payload.get("capabilities") if isinstance(payload, dict) else None
+            ),
+        }
+        if include_payload:
+            out["payload"] = payload
+        return out
+
+    agents: List[Dict[str, Any]] = []
+
+    # Configured agents first (self + peers).
+    for aid in sorted(configured_ids):
+        agents.append(_format(aid, by_id.get(aid), configured=True))
+
+    # Then any other agents present in the DB.
+    for aid, rec in sorted(by_id.items()):
+        if aid in configured_ids:
+            continue
+        agents.append(_format(aid, rec, configured=False))
+
+    online = sum(1 for a in agents if a.get("online"))
+    configured = sum(1 for a in agents if a.get("configured"))
+
+    return {
+        "ok": True,
+        "now": now,
+        "stale_after_s": stale,
+        "summary": {"agents": len(agents), "online": online, "configured": configured},
+        "agents": agents,
     }
 
 

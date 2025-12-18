@@ -169,6 +169,69 @@ class LastAppliedRecord(SQLModel, table=True):
     payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
+class AgentHeartbeatRecord(SQLModel, table=True):
+    """
+    Fleet presence + capabilities snapshot for each agent.
+
+    This is stored globally in the shared DB (not per-agent partitioned), keyed by agent_id.
+    """
+
+    __tablename__ = "agent_heartbeats"
+    __table_args__ = (
+        Index("ix_agent_heartbeats_role_updated_at", "role", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+
+    updated_at: float = Field(index=True)
+    started_at: float = Field(default=0.0, index=True)
+
+    name: str = Field(default="", max_length=256)
+    role: str = Field(default="", max_length=128)
+    controller_kind: str = Field(default="", max_length=32)
+    version: str = Field(default="", max_length=64)
+
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class LeaseRecord(SQLModel, table=True):
+    """
+    Small DB-backed lease/lock record used for fleet-wide leader election (scheduler).
+    """
+
+    __tablename__ = "leases"
+
+    key: str = Field(primary_key=True, max_length=128)
+    owner_id: str = Field(index=True, max_length=128)
+    expires_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+
+class SchedulerEventRecord(SQLModel, table=True):
+    """
+    Scheduler action history (for debugging + UI visibility).
+    """
+
+    __tablename__ = "scheduler_events"
+    __table_args__ = (
+        Index("ix_scheduler_events_agent_created_at", "agent_id", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    action: str = Field(index=True, max_length=128)
+    scope: str = Field(index=True, max_length=32)
+    reason: str = Field(default="", max_length=64)
+
+    ok: bool = Field(default=True, index=True)
+    duration_s: float = Field(default=0.0)
+    error: str | None = Field(default=None, max_length=512)
+
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
 def init_db(engine) -> None:  # type: ignore[no-untyped-def]
     SQLModel.metadata.create_all(engine)
 

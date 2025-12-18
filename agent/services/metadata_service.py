@@ -3,17 +3,10 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import Depends, HTTPException
-from sqlmodel import select
 
 from services.auth_service import require_a2a_auth
 from services.reconcile_service import reconcile_data_dir
 from services.state import AppState, get_state
-from sql_store import (
-    AudioAnalysisRecord,
-    LastAppliedRecord,
-    PackIngestRecord,
-    SequenceMetaRecord,
-)
 
 
 def _clamp_limit(limit: int, *, default: int = 200, max_limit: int = 2000) -> int:
@@ -38,15 +31,8 @@ async def meta_packs(
 ) -> Dict[str, Any]:
     db = _require_db(state)
     lim = _clamp_limit(limit)
-    async with db.sessionmaker() as session:
-        stmt = (
-            select(PackIngestRecord)
-            .where(PackIngestRecord.agent_id == db.agent_id)
-            .order_by(PackIngestRecord.updated_at.desc())
-            .limit(lim)
-        )
-        rows = (await session.exec(stmt)).all()
-    return {"ok": True, "packs": [r.model_dump() for r in rows]}
+    packs = await db.list_pack_ingests(limit=lim)
+    return {"ok": True, "packs": packs}
 
 
 async def meta_sequences(
@@ -56,15 +42,8 @@ async def meta_sequences(
 ) -> Dict[str, Any]:
     db = _require_db(state)
     lim = _clamp_limit(limit, default=500)
-    async with db.sessionmaker() as session:
-        stmt = (
-            select(SequenceMetaRecord)
-            .where(SequenceMetaRecord.agent_id == db.agent_id)
-            .order_by(SequenceMetaRecord.updated_at.desc())
-            .limit(lim)
-        )
-        rows = (await session.exec(stmt)).all()
-    return {"ok": True, "sequences": [r.model_dump() for r in rows]}
+    sequences = await db.list_sequence_meta(limit=lim)
+    return {"ok": True, "sequences": sequences}
 
 
 async def meta_audio_analyses(
@@ -74,15 +53,8 @@ async def meta_audio_analyses(
 ) -> Dict[str, Any]:
     db = _require_db(state)
     lim = _clamp_limit(limit)
-    async with db.sessionmaker() as session:
-        stmt = (
-            select(AudioAnalysisRecord)
-            .where(AudioAnalysisRecord.agent_id == db.agent_id)
-            .order_by(AudioAnalysisRecord.created_at.desc())
-            .limit(lim)
-        )
-        rows = (await session.exec(stmt)).all()
-    return {"ok": True, "audio_analyses": [r.model_dump() for r in rows]}
+    audio_analyses = await db.list_audio_analyses(limit=lim)
+    return {"ok": True, "audio_analyses": audio_analyses}
 
 
 async def meta_last_applied(
@@ -90,16 +62,11 @@ async def meta_last_applied(
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     db = _require_db(state)
-    async with db.sessionmaker() as session:
-        stmt = (
-            select(LastAppliedRecord)
-            .where(LastAppliedRecord.agent_id == db.agent_id)
-            .order_by(LastAppliedRecord.updated_at.desc())
-        )
-        rows = (await session.exec(stmt)).all()
+    rows = await db.list_last_applied()
     out: Dict[str, Any] = {}
     for r in rows:
-        out[str(r.kind)] = r.model_dump()
+        if isinstance(r, dict) and "kind" in r:
+            out[str(r.get("kind"))] = dict(r)
     return {"ok": True, "last_applied": out}
 
 

@@ -9,6 +9,7 @@ from services import fleet_sequences_service
 router = APIRouter()
 
 router.add_api_route("/v1/fleet/peers", fleet_service.fleet_peers, methods=["GET"])
+router.add_api_route("/v1/fleet/status", fleet_service.fleet_status, methods=["GET"])
 router.add_api_route("/v1/fleet/invoke", fleet_service.fleet_invoke, methods=["POST"])
 router.add_api_route(
     "/v1/fleet/apply_random_look",

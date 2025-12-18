@@ -7,6 +7,7 @@ from config import load_settings
 
 def test_auth_disabled_by_default(monkeypatch) -> None:
     monkeypatch.setenv("WLED_TREE_URL", "http://172.16.200.50")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     s = load_settings()
     assert s.auth_enabled is False
     assert s.ui_enabled is True
@@ -14,6 +15,7 @@ def test_auth_disabled_by_default(monkeypatch) -> None:
 
 def test_auth_enabled_requires_password_and_secret(monkeypatch) -> None:
     monkeypatch.setenv("WLED_TREE_URL", "http://172.16.200.50")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("AUTH_ENABLED", "true")
 
     with pytest.raises(RuntimeError):
@@ -31,6 +33,7 @@ def test_auth_enabled_requires_password_and_secret(monkeypatch) -> None:
 
 def test_totp_requires_secret(monkeypatch) -> None:
     monkeypatch.setenv("WLED_TREE_URL", "http://172.16.200.50")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("AUTH_PASSWORD", "pw")
     monkeypatch.setenv("AUTH_JWT_SECRET", "secret")

@@ -89,19 +89,21 @@ async def startup(app: FastAPI | None = None) -> None:
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
 
-        # Optional async DB service (best-effort).
-        db = None
-        if settings.database_url:
-            try:
-                from services.db_service import DatabaseService
+        # Async DB service (required).
+        from services.db_service import DatabaseService
 
-                db = DatabaseService(
-                    database_url=settings.database_url,
-                    agent_id=settings.agent_id,
-                )
-                await db.init()
+        db = DatabaseService(
+            database_url=settings.database_url,
+            agent_id=settings.agent_id,
+        )
+        try:
+            await db.init()
+        except Exception as e:
+            try:
+                await peer_http.aclose()
             except Exception:
-                db = None
+                pass
+            raise RuntimeError(f"Database init failed: {e}") from e
 
         # Jobs (async core loop).
         jobs = AsyncJobManager(
@@ -485,6 +487,59 @@ async def startup(app: FastAPI | None = None) -> None:
         except Exception:
             st.scheduler = None
 
+        # Fleet heartbeat: publish agent presence + capabilities into SQL (no fanout).
+        if db is not None:
+            hb_interval_s = max(
+                5.0, float(os.environ.get("AGENT_HEARTBEAT_INTERVAL_S") or 10.0)
+            )
+
+            async def _heartbeat_loop() -> None:
+                while True:
+                    try:
+                        payload: Dict[str, Any] = {
+                            "capabilities": [
+                                str(c.get("action"))
+                                for c in (a2a_service.CAPABILITIES or [])
+                                if isinstance(c, dict) and c.get("action")
+                            ],
+                            "peers_configured": sorted(
+                                [str(k) for k in (st.peers or {}).keys()]
+                            ),
+                            "ui_enabled": bool(settings.ui_enabled),
+                            "auth_enabled": bool(settings.auth_enabled),
+                            "openai_enabled": bool(settings.openai_api_key),
+                            "fpp_enabled": bool(settings.fpp_base_url),
+                        }
+                        try:
+                            payload["status"] = await a2a_service.actions()["status"](
+                                st, {}
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            sched = getattr(st, "scheduler", None)
+                            if sched is not None and hasattr(sched, "status"):
+                                payload["scheduler"] = await sched.status()
+                        except Exception:
+                            pass
+
+                        await db.upsert_agent_heartbeat(
+                            agent_id=str(settings.agent_id),
+                            started_at=float(st.started_at),
+                            name=str(settings.agent_name),
+                            role=str(settings.agent_role),
+                            controller_kind=str(settings.controller_kind),
+                            version=str(APP_VERSION),
+                            payload=payload,
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(float(hb_interval_s))
+
+            st.maintenance_tasks.append(
+                asyncio.create_task(_heartbeat_loop(), name="db_agent_heartbeat")
+            )
+
         # DB maintenance: job retention.
         if db is not None and (
             settings.job_history_max_rows > 0 or settings.job_history_max_days > 0
@@ -512,6 +567,39 @@ async def startup(app: FastAPI | None = None) -> None:
 
             st.maintenance_tasks.append(
                 asyncio.create_task(_retention_loop(), name="db_job_retention")
+            )
+
+        # DB maintenance: scheduler event retention.
+        if db is not None and (
+            settings.scheduler_events_max_rows > 0
+            or settings.scheduler_events_max_days > 0
+        ):
+            interval_s = float(settings.scheduler_events_maintenance_interval_s or 3600)
+
+            async def _scheduler_events_retention_loop() -> None:
+                while True:
+                    try:
+                        await db.enforce_scheduler_events_retention(
+                            max_rows=(
+                                settings.scheduler_events_max_rows
+                                if settings.scheduler_events_max_rows > 0
+                                else None
+                            ),
+                            max_days=(
+                                settings.scheduler_events_max_days
+                                if settings.scheduler_events_max_days > 0
+                                else None
+                            ),
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(max(30.0, interval_s))
+
+            st.maintenance_tasks.append(
+                asyncio.create_task(
+                    _scheduler_events_retention_loop(),
+                    name="db_scheduler_events_retention",
+                )
             )
 
         # Optional DB reconcile on startup.

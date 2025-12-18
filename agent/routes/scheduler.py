@@ -33,3 +33,8 @@ router.add_api_route(
     scheduler_service.scheduler_run_once,
     methods=["POST"],
 )
+router.add_api_route(
+    "/v1/scheduler/events",
+    scheduler_service.scheduler_events,
+    methods=["GET"],
+)

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import os
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -17,6 +20,7 @@ from config import Settings, load_settings
 from geometry import TreeGeometry
 from patterns import PatternFactory
 from pixel_streamer import PixelStreamConfig, PixelStreamer
+from services.db_service import DatabaseService
 
 
 app = FastAPI(title="Pixel Streaming Agent", version="3.4.0")
@@ -127,6 +131,111 @@ STREAMER = PixelStreamer(
     fps_default=SETTINGS.ddp_fps_default,
     fps_max=SETTINGS.ddp_fps_max,
 )
+
+STARTED_AT = time.time()
+DB: DatabaseService | None = None
+HEARTBEAT_TASK: asyncio.Task[None] | None = None
+
+
+def _peer_names(entries: tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    for raw in entries:
+        s = str(raw).strip()
+        if not s:
+            continue
+        if "=" in s:
+            name, _url = s.split("=", 1)
+            name = name.strip()
+            out.append(name or s)
+        else:
+            out.append(s)
+    # de-dup while preserving order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for n in out:
+        if n in seen:
+            continue
+        seen.add(n)
+        uniq.append(n)
+    return uniq
+
+
+@app.on_event("startup")
+async def _startup_db_and_heartbeat() -> None:
+    global DB, HEARTBEAT_TASK
+
+    DB = DatabaseService(database_url=SETTINGS.database_url, agent_id=SETTINGS.agent_id)
+    await DB.init()
+    app.state.db = DB  # type: ignore[attr-defined]
+
+    hb_interval_s = max(
+        5.0, float(os.environ.get("AGENT_HEARTBEAT_INTERVAL_S") or 10.0)
+    )
+
+    async def _hb_loop() -> None:
+        while True:
+            try:
+                payload: Dict[str, Any] = {
+                    "capabilities": [
+                        str(c.get("action"))
+                        for c in _CAPABILITIES
+                        if isinstance(c, dict) and c.get("action")
+                    ],
+                    "peers_configured": _peer_names(SETTINGS.a2a_peers),
+                    "ui_enabled": bool(SETTINGS.ui_enabled),
+                    "auth_enabled": bool(SETTINGS.auth_enabled),
+                    "pixel": {
+                        "protocol": SETTINGS.pixel_protocol,
+                        "host": SETTINGS.pixel_host,
+                        "port": SETTINGS.pixel_port,
+                        "universe_start": SETTINGS.pixel_universe_start,
+                        "channels_per_universe": SETTINGS.pixel_channels_per_universe,
+                        "pixel_count": SETTINGS.pixel_count,
+                    },
+                }
+                try:
+                    payload["status"] = {"ddp": STREAMER.status().__dict__}
+                except Exception:
+                    pass
+
+                if DB is not None:
+                    await DB.upsert_agent_heartbeat(
+                        agent_id=str(SETTINGS.agent_id),
+                        started_at=float(STARTED_AT),
+                        name=str(SETTINGS.agent_name),
+                        role=str(SETTINGS.agent_role),
+                        controller_kind=str(SETTINGS.controller_kind),
+                        version=str(app.version),
+                        payload=payload,
+                    )
+            except Exception:
+                pass
+            await asyncio.sleep(float(hb_interval_s))
+
+    HEARTBEAT_TASK = asyncio.create_task(_hb_loop(), name="db_agent_heartbeat")
+
+
+@app.on_event("shutdown")
+async def _shutdown_db_and_heartbeat() -> None:
+    global DB, HEARTBEAT_TASK
+
+    if HEARTBEAT_TASK is not None:
+        try:
+            HEARTBEAT_TASK.cancel()
+        except Exception:
+            pass
+        try:
+            await HEARTBEAT_TASK
+        except Exception:
+            pass
+        HEARTBEAT_TASK = None
+
+    if DB is not None:
+        try:
+            await DB.close()
+        except Exception:
+            pass
+        DB = None
 
 
 class DDPStartRequest(BaseModel):

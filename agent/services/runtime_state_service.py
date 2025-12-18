@@ -10,7 +10,6 @@ from fastapi import Depends, HTTPException
 from pack_io import read_json, write_json
 from services.auth_service import require_a2a_auth
 from services.state import AppState, get_state
-from sql_store import KVRecord
 
 
 async def persist_runtime_state(
@@ -57,20 +56,7 @@ async def persist_runtime_state(
             try:
                 key = str(getattr(state, "kv_runtime_state_key", "runtime_state") or "")
                 if key:
-                    async with db.sessionmaker() as session:
-                        rec = await session.get(KVRecord, (db.agent_id, key))
-                        if rec is None:
-                            rec = KVRecord(
-                                agent_id=db.agent_id,
-                                key=key,
-                                updated_at=float(out["updated_at"]),
-                                value=dict(out),
-                            )
-                            session.add(rec)
-                        else:
-                            rec.updated_at = float(out["updated_at"])
-                            rec.value = dict(out)
-                        await session.commit()
+                    await db.kv_set_json(key, dict(out))
             except Exception:
                 pass
 
@@ -95,10 +81,9 @@ async def runtime_state(
             try:
                 key = str(getattr(state, "kv_runtime_state_key", "runtime_state") or "")
                 if key:
-                    async with db.sessionmaker() as session:
-                        rec = await session.get(KVRecord, (db.agent_id, key))
-                        if rec and rec.value:
-                            return dict(rec.value)
+                    row = await db.kv_get_json(key)
+                    if row:
+                        return dict(row)
             except Exception:
                 pass
 

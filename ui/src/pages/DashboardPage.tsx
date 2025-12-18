@@ -89,6 +89,14 @@ export function DashboardPage() {
       }
       try {
         out.fleet = await api("/v1/fleet/peers", { method: "GET" });
+        try {
+          out.fleet_db = await api("/v1/fleet/status", { method: "GET" });
+        } catch (e) {
+          out.fleet_db = {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
         out.fleet_status = await api("/v1/fleet/invoke", {
           method: "POST",
           json: { action: "status", params: {}, include_self: true },

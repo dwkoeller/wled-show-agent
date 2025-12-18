@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import Session
 
 from pack_io import read_json
 from services.state import AppState
@@ -269,13 +269,13 @@ def _scan_audio_analyses(root: Path, *, limit: int) -> List[_AudioMeta]:
     return out
 
 
-async def _upsert_pack_ingests(
-    session: AsyncSession, *, agent_id: str, items: List[_PackIngestMeta]
+def _upsert_pack_ingests(
+    session: Session, *, agent_id: str, items: List[_PackIngestMeta]
 ) -> int:
     upserted = 0
     for it in items:
         key = (agent_id, str(it.dest_dir))
-        rec = await session.get(PackIngestRecord, key)
+        rec = session.get(PackIngestRecord, key)
         if rec is None:
             rec = PackIngestRecord(
                 agent_id=agent_id,
@@ -299,13 +299,13 @@ async def _upsert_pack_ingests(
     return upserted
 
 
-async def _upsert_sequences(
-    session: AsyncSession, *, agent_id: str, items: List[_SequenceMeta]
+def _upsert_sequences(
+    session: Session, *, agent_id: str, items: List[_SequenceMeta]
 ) -> int:
     upserted = 0
     for it in items:
         key = (agent_id, str(it.file))
-        rec = await session.get(SequenceMetaRecord, key)
+        rec = session.get(SequenceMetaRecord, key)
         if rec is None:
             rec = SequenceMetaRecord(
                 agent_id=agent_id,
@@ -324,13 +324,13 @@ async def _upsert_sequences(
     return upserted
 
 
-async def _upsert_audio_analyses(
-    session: AsyncSession, *, agent_id: str, items: List[_AudioMeta]
+def _upsert_audio_analyses(
+    session: Session, *, agent_id: str, items: List[_AudioMeta]
 ) -> int:
     upserted = 0
     for it in items:
         key = (agent_id, str(it.analysis_id))
-        rec = await session.get(AudioAnalysisRecord, key)
+        rec = session.get(AudioAnalysisRecord, key)
         if rec is None:
             rec = AudioAnalysisRecord(
                 agent_id=agent_id,
@@ -386,20 +386,27 @@ async def reconcile_data_dir(
     upserted_sequences = 0
     upserted_audio = 0
 
-    async with db.sessionmaker() as session:
-        if pack_items:
-            upserted_packs = await _upsert_pack_ingests(
-                session, agent_id=db.agent_id, items=pack_items
+    def _write() -> Tuple[int, int, int]:
+        with Session(db.engine) as session:
+            up_p = (
+                _upsert_pack_ingests(session, agent_id=db.agent_id, items=pack_items)
+                if pack_items
+                else 0
             )
-        if seq_items:
-            upserted_sequences = await _upsert_sequences(
-                session, agent_id=db.agent_id, items=seq_items
+            up_s = (
+                _upsert_sequences(session, agent_id=db.agent_id, items=seq_items)
+                if seq_items
+                else 0
             )
-        if audio_items:
-            upserted_audio = await _upsert_audio_analyses(
-                session, agent_id=db.agent_id, items=audio_items
+            up_a = (
+                _upsert_audio_analyses(session, agent_id=db.agent_id, items=audio_items)
+                if audio_items
+                else 0
             )
-        await session.commit()
+            session.commit()
+            return up_p, up_s, up_a
+
+    upserted_packs, upserted_sequences, upserted_audio = await asyncio.to_thread(_write)
 
     return {
         "ok": True,

@@ -56,6 +56,15 @@ class AsyncSchedulerService:
         self._last_action: str | None = None
         self._last_error: str | None = None
 
+        # Fleet-wide scheduler leader election.
+        self._lease_key = "wsa:scheduler"
+        self._lease_ttl_s = 15.0
+        self._lease_check_every_s = 5.0
+        self._lease_next_check_at = 0.0
+        self._leader = False
+        self._lease_owner: str | None = None
+        self._lease_expires_at: float | None = None
+
         self._config = SchedulerConfig()
 
     async def init(self) -> None:
@@ -113,6 +122,9 @@ class AsyncSchedulerService:
             last_action_at = self._last_action_at
             last_action = self._last_action
             last_error = self._last_error
+            leader = bool(self._leader)
+            lease_owner = self._lease_owner
+            lease_expires_at = self._lease_expires_at
 
         now_ts = time.time()
         next_in_s: float | None = None
@@ -132,6 +144,13 @@ class AsyncSchedulerService:
             "ok": True,
             "running": running,
             "in_window": in_window_now,
+            "leader": leader,
+            "lease": {
+                "key": self._lease_key,
+                "owner_id": lease_owner,
+                "expires_at": lease_expires_at,
+                "ttl_s": float(self._lease_ttl_s),
+            },
             "last_action_at": last_action_at,
             "last_action": last_action,
             "last_error": last_error,
@@ -141,7 +160,64 @@ class AsyncSchedulerService:
 
     async def run_once(self) -> None:
         cfg = await self.get_config()
+        # Respect fleet leader election to avoid double-triggering from non-coordinator nodes.
+        if not await self._ensure_leader(force=True):
+            raise HTTPException(status_code=409, detail="Scheduler is not leader")
         await self._execute_action(cfg, reason="run_once")
+
+    async def _ensure_leader(self, *, force: bool = False) -> bool:
+        """
+        Ensure this scheduler instance holds the DB lease.
+
+        When not leader, the scheduler stays running but does not execute actions.
+        """
+        now = time.time()
+        if (not force) and now < float(self._lease_next_check_at or 0.0):
+            async with self._lock:
+                return bool(self._leader)
+
+        self._lease_next_check_at = now + float(self._lease_check_every_s)
+
+        db = getattr(self._state, "db", None)
+        if db is None:
+            async with self._lock:
+                self._leader = True
+                self._lease_owner = self._state.settings.agent_id
+                self._lease_expires_at = None
+            return True
+
+        acquired = False
+        try:
+            acquired = await db.try_acquire_lease(
+                key=str(self._lease_key),
+                owner_id=str(self._state.settings.agent_id),
+                ttl_s=float(self._lease_ttl_s),
+            )
+        except Exception:
+            acquired = False
+
+        lease_owner = None
+        lease_expires_at = None
+        try:
+            lease = await db.get_lease(str(self._lease_key))
+            if lease:
+                lease_owner = str(lease.get("owner_id") or "") or None
+                try:
+                    lease_expires_at = float(lease.get("expires_at"))  # type: ignore[arg-type]
+                except Exception:
+                    lease_expires_at = None
+        except Exception:
+            pass
+
+        async with self._lock:
+            self._leader = bool(acquired)
+            self._lease_owner = (
+                str(self._state.settings.agent_id) if acquired else lease_owner
+            )
+            self._lease_expires_at = (
+                (now + float(self._lease_ttl_s)) if acquired else lease_expires_at
+            )
+            return bool(self._leader)
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -162,6 +238,11 @@ class AsyncSchedulerService:
                 self._window_active = False
             return
 
+        # Leader election (DB lease) to ensure only one scheduler is active fleet-wide.
+        async with self._lock:
+            was_leader = bool(self._leader)
+        leader = await self._ensure_leader()
+
         start_min = hhmm_to_minutes(cfg.start_hhmm)
         end_min = hhmm_to_minutes(cfg.end_hhmm)
         now_min = _now_minutes_local()
@@ -170,6 +251,15 @@ class AsyncSchedulerService:
         async with self._lock:
             prev_active = self._window_active
             self._window_active = active_now
+
+        # If we just became leader inside the window, trigger once immediately.
+        if leader and (not was_leader) and active_now:
+            await self._execute_action(cfg, reason="leader_acquired")
+            return
+
+        # Non-leader schedulers do not execute actions.
+        if not leader:
+            return
 
         if active_now and not prev_active:
             await self._execute_action(cfg, reason="enter_window")
@@ -193,6 +283,9 @@ class AsyncSchedulerService:
             await self._ensure_sequence(cfg, reason="tick")
 
     async def _stop_all(self, cfg: SchedulerConfig, *, reason: str) -> None:
+        t0 = time.perf_counter()
+        ok = True
+        err: str | None = None
         try:
             if cfg.scope == "fleet":
                 await fleet_service.fleet_stop_all(
@@ -213,8 +306,31 @@ class AsyncSchedulerService:
             async with self._lock:
                 self._last_error = None
         except Exception as e:
+            ok = False
+            err = str(e)
             async with self._lock:
                 self._last_error = str(e)
+        finally:
+            db = getattr(self._state, "db", None)
+            if db is not None:
+                try:
+                    await db.add_scheduler_event(
+                        agent_id=str(self._state.settings.agent_id),
+                        action="stop_all",
+                        scope=str(cfg.scope),
+                        reason=str(reason),
+                        ok=bool(ok),
+                        duration_s=max(0.0, time.perf_counter() - t0),
+                        error=err,
+                        payload={
+                            "scope": str(cfg.scope),
+                            "targets": list(cfg.targets or []),
+                            "include_self": bool(cfg.include_self),
+                            "stop_all_on_end": bool(cfg.stop_all_on_end),
+                        },
+                    )
+                except Exception:
+                    pass
 
     async def _execute_action(self, cfg: SchedulerConfig, *, reason: str) -> None:
         if cfg.mode == "looks":
@@ -235,6 +351,9 @@ class AsyncSchedulerService:
             if cfg.brightness is not None
             else None
         )
+        t0 = time.perf_counter()
+        ok = True
+        err: str | None = None
         try:
             if cfg.scope == "fleet":
                 res = await fleet_service.fleet_apply_random_look(
@@ -271,6 +390,30 @@ class AsyncSchedulerService:
                         pass
                 async with self._lock:
                     self._last_error = None
+                db = getattr(self._state, "db", None)
+                if db is not None:
+                    try:
+                        picked = ((res or {}).get("result") or {}).get("picked") or {}
+                        pack_file = ((res or {}).get("result") or {}).get("pack_file")
+                        await db.add_scheduler_event(
+                            agent_id=str(self._state.settings.agent_id),
+                            action="apply_random_look",
+                            scope="fleet",
+                            reason=str(reason),
+                            ok=True,
+                            duration_s=max(0.0, time.perf_counter() - t0),
+                            payload={
+                                "scope": "fleet",
+                                "theme": cfg.theme,
+                                "brightness_override": bri,
+                                "targets": list(cfg.targets or []),
+                                "include_self": bool(cfg.include_self),
+                                "picked": dict(picked or {}),
+                                "pack_file": str(pack_file) if pack_file else None,
+                            },
+                        )
+                    except Exception:
+                        pass
                 return
 
             looks = getattr(self._state, "looks", None)
@@ -307,8 +450,31 @@ class AsyncSchedulerService:
             async with self._lock:
                 self._last_error = None
         except Exception as e:
+            ok = False
+            err = str(e)
             async with self._lock:
                 self._last_error = str(e)
+        finally:
+            if cfg.scope != "fleet":
+                db = getattr(self._state, "db", None)
+                if db is not None:
+                    try:
+                        await db.add_scheduler_event(
+                            agent_id=str(self._state.settings.agent_id),
+                            action="apply_random_look",
+                            scope="local",
+                            reason=str(reason),
+                            ok=bool(ok),
+                            duration_s=max(0.0, time.perf_counter() - t0),
+                            error=err,
+                            payload={
+                                "scope": "local",
+                                "theme": cfg.theme,
+                                "brightness_override": bri,
+                            },
+                        )
+                    except Exception:
+                        pass
 
     async def _ensure_sequence(self, cfg: SchedulerConfig, *, reason: str) -> None:
         file = (cfg.sequence_file or "").strip()
@@ -317,6 +483,8 @@ class AsyncSchedulerService:
                 self._last_error = "sequence_file is required for mode=sequence"
             return
 
+        t0 = time.perf_counter()
+        started = False
         try:
             if cfg.scope == "fleet":
                 fleet = getattr(self._state, "fleet_sequences", None)
@@ -335,6 +503,7 @@ class AsyncSchedulerService:
                         targets=cfg.targets,
                         include_self=cfg.include_self,
                     )
+                    started = True
                     await persist_runtime_state(
                         self._state,
                         "scheduler_start_fleet_sequence",
@@ -353,6 +522,7 @@ class AsyncSchedulerService:
                     await asyncio.to_thread(
                         seq.play, file=file, loop=bool(cfg.sequence_loop)
                     )
+                    started = True
                     await persist_runtime_state(
                         self._state,
                         "scheduler_play_sequence",
@@ -381,11 +551,56 @@ class AsyncSchedulerService:
                 self._last_action_at = time.time()
                 self._last_action = f"ensure_sequence({cfg.scope})"
                 self._last_error = None
+
+            # Record an event only when we actually start/transition playback.
+            if started:
+                db = getattr(self._state, "db", None)
+                if db is not None:
+                    try:
+                        await db.add_scheduler_event(
+                            agent_id=str(self._state.settings.agent_id),
+                            action="ensure_sequence",
+                            scope=str(cfg.scope),
+                            reason=str(reason),
+                            ok=True,
+                            duration_s=max(0.0, time.perf_counter() - t0),
+                            payload={
+                                "scope": str(cfg.scope),
+                                "file": file,
+                                "loop": bool(cfg.sequence_loop),
+                                "targets": list(cfg.targets or []),
+                                "include_self": bool(cfg.include_self),
+                            },
+                        )
+                    except Exception:
+                        pass
         except HTTPException:
             raise
         except Exception as e:
             async with self._lock:
                 self._last_error = str(e)
+            if started:
+                db = getattr(self._state, "db", None)
+                if db is not None:
+                    try:
+                        await db.add_scheduler_event(
+                            agent_id=str(self._state.settings.agent_id),
+                            action="ensure_sequence",
+                            scope=str(cfg.scope),
+                            reason=str(reason),
+                            ok=False,
+                            duration_s=max(0.0, time.perf_counter() - t0),
+                            error=str(e),
+                            payload={
+                                "scope": str(cfg.scope),
+                                "file": file,
+                                "loop": bool(cfg.sequence_loop),
+                                "targets": list(cfg.targets or []),
+                                "include_self": bool(cfg.include_self),
+                            },
+                        )
+                    except Exception:
+                        pass
 
     async def _load_config(self) -> SchedulerConfig:
         # DB KV first (if configured).

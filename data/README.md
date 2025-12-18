@@ -17,4 +17,4 @@ The agent writes:
 
 Safe to delete anytime.
 
-If you set `DATABASE_URL`, job history + small UI state (scheduler config, runtime snapshot) are also persisted to SQL.
+Job history + small UI state (scheduler config, runtime snapshot) are persisted to SQL (`DATABASE_URL` required).

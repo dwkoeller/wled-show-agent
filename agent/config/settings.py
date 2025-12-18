@@ -184,11 +184,14 @@ class Settings:
     # Data dir
     data_dir: str
 
-    # Database (optional)
-    database_url: str | None
+    # Database (required)
+    database_url: str
     job_history_max_rows: int
     job_history_max_days: int
     job_history_maintenance_interval_s: int
+    scheduler_events_max_rows: int
+    scheduler_events_max_days: int
+    scheduler_events_maintenance_interval_s: int
     db_reconcile_on_startup: bool
 
     # OpenAI
@@ -247,11 +250,24 @@ def load_settings() -> Settings:
         )
 
     data_dir = os.environ.get("DATA_DIR", "/data").strip() or "/data"
-    database_url = os.environ.get("DATABASE_URL", "").strip() or None
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required (e.g. mysql://wsa:wsa@db:3306/wsa or sqlite:////data/wsa.sqlite)"
+        )
     job_history_max_rows = max(0, _as_int(os.environ.get("JOB_HISTORY_MAX_ROWS"), 2000))
     job_history_max_days = max(0, _as_int(os.environ.get("JOB_HISTORY_MAX_DAYS"), 30))
     job_history_maintenance_interval_s = max(
         60, _as_int(os.environ.get("JOB_HISTORY_MAINTENANCE_INTERVAL_S"), 3600)
+    )
+    scheduler_events_max_rows = max(
+        0, _as_int(os.environ.get("SCHEDULER_EVENTS_MAX_ROWS"), 5000)
+    )
+    scheduler_events_max_days = max(
+        0, _as_int(os.environ.get("SCHEDULER_EVENTS_MAX_DAYS"), 30)
+    )
+    scheduler_events_maintenance_interval_s = max(
+        60, _as_int(os.environ.get("SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S"), 3600)
     )
     db_reconcile_on_startup = _as_bool(
         os.environ.get("DB_RECONCILE_ON_STARTUP"), default=True
@@ -413,6 +429,9 @@ def load_settings() -> Settings:
         job_history_max_rows=job_history_max_rows,
         job_history_max_days=job_history_max_days,
         job_history_maintenance_interval_s=job_history_maintenance_interval_s,
+        scheduler_events_max_rows=scheduler_events_max_rows,
+        scheduler_events_max_days=scheduler_events_max_days,
+        scheduler_events_maintenance_interval_s=scheduler_events_maintenance_interval_s,
         db_reconcile_on_startup=bool(db_reconcile_on_startup),
         openai_api_key=openai_api_key,
         openai_model=openai_model,
