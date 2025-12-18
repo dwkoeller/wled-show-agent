@@ -15,7 +15,11 @@ def ensure_dir(path: str) -> str:
 def nowstamp() -> str:
     # Safe filename timestamp (UTC-ish)
     import datetime
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat().replace(":", "-") + "Z"
+
+    return (
+        datetime.datetime.utcnow().replace(microsecond=0).isoformat().replace(":", "-")
+        + "Z"
+    )
 
 
 def write_jsonl(path: str, rows: Iterable[Dict[str, Any]]) -> str:

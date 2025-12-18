@@ -13,7 +13,7 @@ def test_render_http_post_script_contains_url_path_and_payload() -> None:
     assert "AGENT_URL='http://172.16.200.10:8088'" in script
     assert "/v1/fleet/stop_all" in script
     assert "PAYLOAD_B64='" in script
-    assert 'A2A_KEY=' in script
+    assert "A2A_KEY=" in script
 
 
 def test_render_http_post_script_embeds_a2a_key_when_provided() -> None:
@@ -24,4 +24,3 @@ def test_render_http_post_script_embeds_a2a_key_when_provided() -> None:
         a2a_api_key="secret",
     )
     assert "A2A_KEY='secret'" in script
-

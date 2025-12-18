@@ -47,7 +47,9 @@ def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-def mix_rgb(a: Tuple[int, int, int], b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+def mix_rgb(
+    a: Tuple[int, int, int], b: Tuple[int, int, int], t: float
+) -> Tuple[int, int, int]:
     t = max(0.0, min(1.0, t))
     return (
         clamp8(lerp(a[0], b[0], t)),
@@ -75,7 +77,9 @@ class RenderContext:
 class Pattern:
     name: str = "pattern"
 
-    def __init__(self, ctx: RenderContext, params: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, ctx: RenderContext, params: Optional[Dict[str, Any]] = None
+    ) -> None:
         self.ctx = ctx
         self.params: Dict[str, Any] = params or {}
 
@@ -86,6 +90,7 @@ class Pattern:
 # -----------------------
 #  Basic patterns
 # -----------------------
+
 
 class Solid(Pattern):
     name = "solid"
@@ -113,7 +118,7 @@ class RainbowCycle(Pattern):
             h = (base + (i / max(1, n)) * spread) % 1.0
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, 1.0), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -123,16 +128,20 @@ class GlitterRainbow(Pattern):
     def frame(self, *, t: float, frame_idx: int, brightness: int) -> bytes:
         density = float(self.params.get("density", 0.02))
         rng = random.Random(int(self.params.get("seed", 1337)) + frame_idx)
-        base = RainbowCycle(self.ctx, params={"speed": self.params.get("speed", 0.06), "spread": self.params.get("spread", 1.3)}).frame(
-            t=t, frame_idx=frame_idx, brightness=brightness
-        )
+        base = RainbowCycle(
+            self.ctx,
+            params={
+                "speed": self.params.get("speed", 0.06),
+                "spread": self.params.get("spread", 1.3),
+            },
+        ).frame(t=t, frame_idx=frame_idx, brightness=brightness)
         out = bytearray(base)
         n = self.ctx.led_count
         sparkles = int(n * density)
         for _ in range(max(1, sparkles)):
             i = rng.randrange(0, n)
             j = i * 3
-            out[j:j+3] = bytes(scale_rgb((255, 255, 255), brightness))
+            out[j : j + 3] = bytes(scale_rgb((255, 255, 255), brightness))
         return bytes(out)
 
 
@@ -167,7 +176,7 @@ class Twinkle(Pattern):
             amp = 1.0 - abs(frac - 0.5) * 2.0
             amp = max(0.0, amp) ** 1.7
             rgb = scale_rgb(base, int(brightness * amp))
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -191,7 +200,7 @@ class Sparkle(Pattern):
             i = rng.randrange(0, n)
             rgb = scale_rgb((255, 255, 255), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -215,10 +224,10 @@ class Comet(Pattern):
             if d > tail:
                 continue
             amp = 1.0 - (d / max(1, tail))
-            amp = amp ** 2.0
+            amp = amp**2.0
             rgb = scale_rgb(base, int(brightness * amp))
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -238,7 +247,7 @@ class TheaterChase(Pattern):
         for i in range(n):
             rgb = color if ((i + phase) % period == 0) else bg
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -249,7 +258,11 @@ class Strobe(Pattern):
         hz = float(self.params.get("hz", 8.0))
         on = (int(t * hz) % 2) == 0
         color = tuple(self.params.get("color", [255, 255, 255]))
-        rgb = scale_rgb((int(color[0]), int(color[1]), int(color[2])), brightness) if on else (0, 0, 0)
+        rgb = (
+            scale_rgb((int(color[0]), int(color[1]), int(color[2])), brightness)
+            if on
+            else (0, 0, 0)
+        )
         out = bytearray(self.ctx.led_count * 3)
         out[0::3] = bytes([rgb[0]]) * self.ctx.led_count
         out[1::3] = bytes([rgb[1]]) * self.ctx.led_count
@@ -260,6 +273,7 @@ class Strobe(Pattern):
 # -----------------------
 #  Geometry-aware patterns
 # -----------------------
+
 
 class CandySpiral(Pattern):
     name = "candy_spiral"
@@ -282,13 +296,17 @@ class CandySpiral(Pattern):
             for i in range(n):
                 c = red if ((i + offset) // band) % 2 == 0 else white
                 j = i * 3
-                out[j:j+3] = bytes(c)
+                out[j : j + 3] = bytes(c)
             return bytes(out)
 
         for i in range(n):
             ang, y, _ = self.ctx.geometry.coords(i)
             # helical coordinate
-            phase = (ang / (2.0 * math.pi)) + (y * float(self.params.get("twist", 1.2))) + (t * speed)
+            phase = (
+                (ang / (2.0 * math.pi))
+                + (y * float(self.params.get("twist", 1.2)))
+                + (t * speed)
+            )
             v = (phase * stripes) % 1.0
             c = red if v < 0.5 else white
             # soften edges
@@ -296,7 +314,7 @@ class CandySpiral(Pattern):
             if edge < 0.05:
                 c = mix_rgb(red, white, 0.5)
             j = i * 3
-            out[j:j+3] = bytes(c)
+            out[j : j + 3] = bytes(c)
         return bytes(out)
 
 
@@ -318,7 +336,7 @@ class VerticalWipe(Pattern):
             for i in range(n):
                 c = color if i <= head else bg
                 j = i * 3
-                out[j:j+3] = bytes(c)
+                out[j : j + 3] = bytes(c)
             return bytes(out)
 
         head_y = (t * speed) % 1.0
@@ -335,7 +353,7 @@ class VerticalWipe(Pattern):
                 else:
                     c = bg
             j = i * 3
-            out[j:j+3] = bytes(c)
+            out[j : j + 3] = bytes(c)
         return bytes(out)
 
 
@@ -355,7 +373,7 @@ class ColorWaves(Pattern):
             rgb = hsv_to_rgb(h, 1.0, max(0.0, min(1.0, v)))
             rgb = scale_rgb(rgb, brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -381,7 +399,7 @@ class Plasma(Pattern):
             h = (0.6 + v * 0.25 + t * 0.02) % 1.0
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, 1.0), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -416,7 +434,7 @@ class Snowfall(Pattern):
                 i0 = rng.randrange(0, n)
                 idx = int((i0 - (t * speed * n)) % n)
             j = idx * 3
-            out[j:j+3] = bytes(scale_rgb((255, 255, 255), brightness))
+            out[j : j + 3] = bytes(scale_rgb((255, 255, 255), brightness))
         return bytes(out)
 
 
@@ -440,7 +458,7 @@ class Confetti(Pattern):
             h = rng.random()
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, 1.0), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -465,7 +483,7 @@ class Aurora(Pattern):
             val = 0.15 + 0.85 * (v * 0.6 + v2 * 0.4)
             rgb = scale_rgb(hsv_to_rgb(h, sat, min(1.0, val)), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -488,12 +506,12 @@ class Fireflies(Pattern):
             phase = rng.random() * 2.0 * math.pi
             freq = lerp(0.3, 1.5, rng.random())
             amp = max(0.0, math.sin(t * freq * 2.0 * math.pi + phase))
-            amp = amp ** 2.2
+            amp = amp**2.2
             # warm color
             c = (255, int(lerp(120, 220, rng.random())), 40)
             rgb = scale_rgb(c, int(brightness * amp))
             j = center * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -524,7 +542,7 @@ class MatrixRain(Pattern):
                     amp = max(0.0, 1.0 - d / max(1, length))
                     rgb = scale_rgb((0, 255, 80), int(brightness * amp))
                     j = i * 3
-                    out[j:j+3] = bytes(rgb)
+                    out[j : j + 3] = bytes(rgb)
             return bytes(out)
 
         # Geometry: per-run vertical streaks
@@ -548,10 +566,8 @@ class MatrixRain(Pattern):
                     amp = max(0.0, 1.0 - d / max(1, length))
                     rgb = scale_rgb((0, 255, 80), int(brightness * amp))
                     j = idx * 3
-                    out[j:j+3] = bytes(rgb)
+                    out[j : j + 3] = bytes(rgb)
         return bytes(out)
-
-
 
 
 class BreathingSolid(Pattern):
@@ -589,7 +605,7 @@ class GradientScroll(Pattern):
             rgb = mix_rgb(c1, c2, x)
             rgb = scale_rgb(rgb, brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -611,7 +627,7 @@ class BarberPole(Pattern):
             for i in range(n):
                 c = c1 if ((i + offset) // band) % 2 == 0 else c2
                 j = i * 3
-                out[j:j+3] = bytes(c)
+                out[j : j + 3] = bytes(c)
             return bytes(out)
 
         for i in range(n):
@@ -620,7 +636,7 @@ class BarberPole(Pattern):
             v = (phase * stripes) % 1.0
             c = c1 if v < 0.5 else c2
             j = i * 3
-            out[j:j+3] = bytes(c)
+            out[j : j + 3] = bytes(c)
         return bytes(out)
 
 
@@ -641,14 +657,14 @@ class SpiralRainbow(Pattern):
             h = base % 1.0
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, 1.0), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
 def _hash01(i: int, seed: int) -> float:
-    x = (i * 0x1f123bb5) ^ (seed * 0x9e3779b9)
+    x = (i * 0x1F123BB5) ^ (seed * 0x9E3779B9)
     x = (x ^ (x >> 16)) & 0xFFFFFFFF
-    x = (x * 0x7feb352d) & 0xFFFFFFFF
+    x = (x * 0x7FEB352D) & 0xFFFFFFFF
     x = (x ^ (x >> 15)) & 0xFFFFFFFF
     return (x & 0xFFFF) / 65535.0
 
@@ -679,7 +695,7 @@ class FireFlicker(Pattern):
                 rgb = mix_rgb((255, 140, 0), (255, 240, 200), (v - 0.66) / 0.34)
             rgb = scale_rgb(rgb, brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -702,7 +718,7 @@ class PulseRings(Pattern):
             h = (base_h + 0.15 * math.sin(2.0 * math.pi * (t * 0.07 + y))) % 1.0
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, max(0.0, v)), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -728,7 +744,7 @@ class LaserSweep(Pattern):
                 amp = max(0.0, 1.0 - d / max(1, w))
                 rgb = mix_rgb(bg, color, amp)
                 j = i * 3
-                out[j:j+3] = bytes(rgb)
+                out[j : j + 3] = bytes(rgb)
             return bytes(out)
 
         head = (t * speed) % 1.0
@@ -740,7 +756,7 @@ class LaserSweep(Pattern):
             amp = max(0.0, 1.0 - d / max(1e-6, width))
             rgb = mix_rgb(bg, color, amp)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -758,7 +774,7 @@ class StaticNoise(Pattern):
             h = _hash01(i + bucket * 17, seed + 1)
             rgb = scale_rgb(hsv_to_rgb(h, 1.0, v), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -784,7 +800,7 @@ class Cylon(Pattern):
             amp = (1.0 - d / max(1, width)) ** 2.2
             rgb = scale_rgb(color, int(brightness * amp))
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -803,7 +819,7 @@ class Checker(Pattern):
             v = ((i + shift) // max(1, block)) % 2
             rgb = c1 if v == 0 else c2
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -823,7 +839,7 @@ class WipeRandom(Pattern):
         for i in range(n):
             j = i * 3
             if i <= head:
-                out[j:j+3] = bytes(rgb)
+                out[j : j + 3] = bytes(rgb)
         return bytes(out)
 
 
@@ -831,7 +847,10 @@ class WipeRandom(Pattern):
 # Segment-aware patterns
 # -----------------------
 
-def _seg_info(ctx: RenderContext, i: int, default_segments: int = 4) -> tuple[int, int, int, int]:
+
+def _seg_info(
+    ctx: RenderContext, i: int, default_segments: int = 4
+) -> tuple[int, int, int, int]:
     """
     Returns (seg_order, seg_count, local_index, seg_len).
 
@@ -868,10 +887,12 @@ class QuadChase(Pattern):
     name = "quad_chase"
 
     def frame(self, *, t: float, frame_idx: int, brightness: int) -> bytes:
-        speed = float(self.params.get("speed", 0.6))   # segments per second
-        tail = float(self.params.get("tail", 1.6))     # higher = wider spill
+        speed = float(self.params.get("speed", 0.6))  # segments per second
+        tail = float(self.params.get("tail", 1.6))  # higher = wider spill
         hue_speed = float(self.params.get("hue_speed", 0.06))
-        phase_offset = float(self.params.get("phase_offset", 0.0))  # segment-order offset at t=0
+        phase_offset = float(
+            self.params.get("phase_offset", 0.0)
+        )  # segment-order offset at t=0
 
         n = self.ctx.led_count
         out = bytearray(n * 3)
@@ -895,7 +916,7 @@ class QuadChase(Pattern):
             hue = (seg_order / max(1.0, float(sc)) + (t * hue_speed)) % 1.0
             rgb = scale_rgb(hsv_to_rgb(hue, 1.0, w), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
 
         return bytes(out)
 
@@ -919,10 +940,10 @@ class OppositePulse(Pattern):
             seg_order, sc, _, _ = _seg_info(self.ctx, i, default_segments=seg_count)
             # even vs odd segments
             w = p if (seg_order % 2 == 0) else (1.0 - p)
-            hue = (0.0 if (seg_order % 2 == 0) else 0.33)
+            hue = 0.0 if (seg_order % 2 == 0) else 0.33
             rgb = scale_rgb(hsv_to_rgb(hue, 1.0, w), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
 
         return bytes(out)
 
@@ -958,7 +979,7 @@ class QuadTwinkle(Pattern):
 
             rgb = scale_rgb(hsv_to_rgb(base_h, 1.0, tw), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
 
         return bytes(out)
 
@@ -979,7 +1000,9 @@ class QuadComets(Pattern):
         seg_count = max(1, seg_count)
 
         for i in range(n):
-            seg_order, sc, local, seg_len = _seg_info(self.ctx, i, default_segments=seg_count)
+            seg_order, sc, local, seg_len = _seg_info(
+                self.ctx, i, default_segments=seg_count
+            )
             head = (t * speed * seg_len) % max(1.0, float(seg_len))
             d = local - head
             if d < 0:
@@ -988,7 +1011,7 @@ class QuadComets(Pattern):
             hue = (seg_order / max(1.0, float(sc))) % 1.0
             rgb = scale_rgb(hsv_to_rgb(hue, 1.0, w), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
 
         return bytes(out)
 
@@ -1020,14 +1043,19 @@ class QuadSpiral(Pattern):
                 theta = (i / max(1.0, float(n))) % 1.0
                 y = theta
 
-            v = (theta * stripes + y * twist + ((seg_order + phase_offset) / max(1.0, float(sc))) * seg_phase + t * speed) % 1.0
+            v = (
+                theta * stripes
+                + y * twist
+                + ((seg_order + phase_offset) / max(1.0, float(sc))) * seg_phase
+                + t * speed
+            ) % 1.0
             # Smooth stripes
             b = 0.5 + 0.5 * math.sin(2.0 * math.pi * v)
             b = max(0.0, min(1.0, b))
             hue = (v + 0.15) % 1.0
             rgb = scale_rgb(hsv_to_rgb(hue, 1.0, b), brightness)
             j = i * 3
-            out[j:j+3] = bytes(rgb)
+            out[j : j + 3] = bytes(rgb)
 
         return bytes(out)
 
@@ -1070,12 +1098,16 @@ PATTERN_REGISTRY: Dict[str, type[Pattern]] = {
     QuadTwinkle.name: QuadTwinkle,
     QuadComets.name: QuadComets,
     QuadSpiral.name: QuadSpiral,
-
 }
 
 
 class PatternFactory:
-    def __init__(self, led_count: int, geometry: TreeGeometry, segment_layout: SegmentLayout | None = None) -> None:
+    def __init__(
+        self,
+        led_count: int,
+        geometry: TreeGeometry,
+        segment_layout: SegmentLayout | None = None,
+    ) -> None:
         self.led_count = led_count
         self.geometry = geometry
         self.segment_layout = segment_layout
@@ -1086,6 +1118,13 @@ class PatternFactory:
     def create(self, name: str, params: Optional[Dict[str, Any]] = None) -> Pattern:
         cls = PATTERN_REGISTRY.get(name)
         if cls is None:
-            raise ValueError(f"Unknown pattern '{name}'. Available: {', '.join(self.available())}")
-        ctx = RenderContext(led_count=self.led_count, geometry=self.geometry, geometry_enabled=self.geometry.enabled_for(self.led_count), segment_layout=getattr(self, 'segment_layout', None))
+            raise ValueError(
+                f"Unknown pattern '{name}'. Available: {', '.join(self.available())}"
+            )
+        ctx = RenderContext(
+            led_count=self.led_count,
+            geometry=self.geometry,
+            geometry_enabled=self.geometry.enabled_for(self.led_count),
+            segment_layout=getattr(self, "segment_layout", None),
+        )
         return cls(ctx, params=params or {})

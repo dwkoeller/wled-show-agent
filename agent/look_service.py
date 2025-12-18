@@ -4,7 +4,7 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from look_generator import LookLibraryGenerator, look_to_wled_state
 from pack_io import nowstamp, read_jsonl, write_jsonl
@@ -65,6 +65,8 @@ class LookService:
         seed: int,
         write_files: bool = True,
         include_multi_segment: bool = True,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        cancel_cb: Callable[[], bool] | None = None,
     ) -> PackSummary:
         gen = LookLibraryGenerator(mapper=self.mapper, seed=seed)
         looks = gen.generate(
@@ -73,6 +75,8 @@ class LookService:
             brightness=min(self.max_bri, brightness),
             include_multi_segment=include_multi_segment,
             segment_ids=self.segment_ids or [0],
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
         )
 
         rows: List[Dict[str, Any]] = []
@@ -112,7 +116,9 @@ class LookService:
         self._cache_theme_index[file] = self._build_theme_index(rows)
         return rows
 
-    def apply_look(self, row: Dict[str, Any], *, brightness_override: Optional[int] = None) -> Dict[str, Any]:
+    def apply_look(
+        self, row: Dict[str, Any], *, brightness_override: Optional[int] = None
+    ) -> Dict[str, Any]:
         state = look_to_wled_state(
             row,
             self.mapper,
@@ -124,7 +130,12 @@ class LookService:
         if "bri" in state:
             state["bri"] = min(self.max_bri, max(1, int(state["bri"])))
         self.wled.apply_state(state, verbose=False)
-        return {"applied": True, "name": row.get("name"), "id": row.get("id"), "theme": row.get("theme")}
+        return {
+            "applied": True,
+            "name": row.get("name"),
+            "id": row.get("id"),
+            "theme": row.get("theme"),
+        }
 
     def choose_random(
         self,
@@ -135,7 +146,9 @@ class LookService:
     ) -> tuple[str, Dict[str, Any]]:
         pack = pack_file or self.latest_pack()
         if not pack:
-            raise RuntimeError("No looks pack found. Generate one first via /v1/looks/generate or /v1/go_crazy.")
+            raise RuntimeError(
+                "No looks pack found. Generate one first via /v1/looks/generate or /v1/go_crazy."
+            )
         rows = self.load_pack(pack)
         if not rows:
             raise RuntimeError("Looks pack is empty.")
@@ -160,6 +173,13 @@ class LookService:
 
         return pack, row
 
-    def apply_random(self, *, theme: Optional[str] = None, pack_file: Optional[str] = None, brightness: Optional[int] = None, seed: Optional[int] = None) -> Dict[str, Any]:
+    def apply_random(
+        self,
+        *,
+        theme: Optional[str] = None,
+        pack_file: Optional[str] = None,
+        brightness: Optional[int] = None,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Any]:
         _, row = self.choose_random(theme=theme, pack_file=pack_file, seed=seed)
         return self.apply_look(row, brightness_override=brightness)

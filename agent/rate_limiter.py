@@ -8,6 +8,7 @@ class Cooldown:
     """
     Simple thread-safe cooldown gate. Prevents calling "fire" more often than every `cooldown_ms`.
     """
+
     def __init__(self, cooldown_ms: int) -> None:
         self.cooldown_ms = max(0, int(cooldown_ms))
         self._lock = threading.Lock()

@@ -24,7 +24,12 @@ def test_fleet_sequence_service_invokes_peers(tmp_path) -> None:
         {
             "name": "t",
             "steps": [
-                {"type": "ddp", "pattern": "solid", "params": {"color": [255, 0, 0]}, "duration_s": 0.1},
+                {
+                    "type": "ddp",
+                    "pattern": "solid",
+                    "params": {"color": [255, 0, 0]},
+                    "duration_s": 0.1,
+                },
                 {"type": "look", "look": {"id": 1, "name": "x"}, "duration_s": 0.1},
             ],
         },
@@ -66,4 +71,3 @@ def test_fleet_sequence_service_invokes_peers(tmp_path) -> None:
     ddp_call = next(c for c in calls if c[1] == "start_ddp_pattern")
     assert "brightness" not in ddp_call[2]
     assert "fps" not in ddp_call[2]
-

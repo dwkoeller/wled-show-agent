@@ -21,6 +21,7 @@ class WLEDMapper:
     Fetches /json/eff and /json/pal and builds case-insensitive name -> ID maps.
     Filters out reserved effects 'RSVD' and '-' as recommended.
     """
+
     def __init__(self, wled: WLEDClient) -> None:
         self.wled = wled
         self._maps: Optional[WLEDNameMaps] = None

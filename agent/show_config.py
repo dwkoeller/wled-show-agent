@@ -16,7 +16,9 @@ class CoordinatorConfig(BaseModel):
 
 
 class FPPConfig(BaseModel):
-    base_url: Optional[str] = Field(default=None, description="FPP base URL (e.g. http://172.16.200.20).")
+    base_url: Optional[str] = Field(
+        default=None, description="FPP base URL (e.g. http://172.16.200.20)."
+    )
 
 
 class PixelOutputConfig(BaseModel):
@@ -29,7 +31,7 @@ class PixelOutputConfig(BaseModel):
 
 class PropConfig(BaseModel):
     id: str
-    kind: str = Field("wled", description="wled or pixel")
+    kind: str = Field("wled", description="wled, pixel, or model")
 
     # Optional metadata
     name: Optional[str] = None
@@ -37,9 +39,17 @@ class PropConfig(BaseModel):
 
     # Optional channel mapping (for FPP/xLights FSEQ export)
     # Absolute channel numbering is 1-based in xLights/FPP conventions.
-    channel_start: Optional[int] = Field(default=None, ge=1, description="Absolute start channel (1-based).")
-    channel_count: Optional[int] = Field(default=None, ge=1, description="Total channels for this prop (usually pixels*3).")
-    pixel_count: Optional[int] = Field(default=None, ge=0, description="Pixel count for this prop (if known).")
+    channel_start: Optional[int] = Field(
+        default=None, ge=1, description="Absolute start channel (1-based)."
+    )
+    channel_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Total channels for this prop (usually pixels*3).",
+    )
+    pixel_count: Optional[int] = Field(
+        default=None, ge=0, description="Pixel count for this prop (if known)."
+    )
 
     # WLED
     wled_url: Optional[str] = None
@@ -55,22 +65,32 @@ class PropConfig(BaseModel):
     def _validate_kind(self) -> "PropConfig":
         k = (self.kind or "").strip().lower()
         object.__setattr__(self, "kind", k)
-        if k not in ("wled", "pixel"):
-            raise ValueError("kind must be 'wled' or 'pixel'")
+        if k not in ("wled", "pixel", "model"):
+            raise ValueError("kind must be 'wled', 'pixel', or 'model'")
         if k == "wled":
             if self.pixel is not None:
                 raise ValueError("pixel must be null for kind='wled'")
         if k == "pixel":
             if self.pixel is None:
                 raise ValueError("pixel is required for kind='pixel'")
+        if k == "model":
+            # Model props are for xLights/FPP planning; they may optionally carry pixel output info.
+            pass
         return self
 
 
 class ShowConfig(BaseModel):
     version: int = Field(1, ge=1)
     name: str = "wled-show"
-    subnet: Optional[str] = Field(default=None, description="LAN subnet for controllers (e.g. 172.16.200.0/24).")
-    channels_per_universe: int = Field(510, ge=1, le=512, description="xLights/FPP planning default (used for conversions).")
+    subnet: Optional[str] = Field(
+        default=None, description="LAN subnet for controllers (e.g. 172.16.200.0/24)."
+    )
+    channels_per_universe: int = Field(
+        510,
+        ge=1,
+        le=512,
+        description="xLights/FPP planning default (used for conversions).",
+    )
 
     coordinator: CoordinatorConfig = Field(default_factory=CoordinatorConfig)
     fpp: FPPConfig = Field(default_factory=FPPConfig)

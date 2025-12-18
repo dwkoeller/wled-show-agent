@@ -32,7 +32,9 @@ def jwt_sign_hs256(message: bytes, secret: str) -> str:
     return _b64url_encode(mac)
 
 
-def jwt_encode_hs256(payload: Dict[str, Any], *, secret: str, ttl_s: int, issuer: Optional[str] = None) -> str:
+def jwt_encode_hs256(
+    payload: Dict[str, Any], *, secret: str, ttl_s: int, issuer: Optional[str] = None
+) -> str:
     now = int(time.time())
     ttl_s = max(10, int(ttl_s))
 
@@ -43,8 +45,12 @@ def jwt_encode_hs256(payload: Dict[str, Any], *, secret: str, ttl_s: int, issuer
     if issuer:
         body.setdefault("iss", str(issuer))
 
-    h = _b64url_encode(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    p = _b64url_encode(json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    h = _b64url_encode(
+        json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    p = _b64url_encode(
+        json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
     sig = jwt_sign_hs256(f"{h}.{p}".encode("ascii"), secret)
     return f"{h}.{p}.{sig}"
 
@@ -128,14 +134,106 @@ def verify_password(supplied: str, expected: str) -> bool:
             expected_hash = _b64url_decode(hash_b64)
         except Exception:
             return False
-        dk = hashlib.pbkdf2_hmac("sha256", supplied_s.encode("utf-8"), salt, iterations, dklen=len(expected_hash))
+        dk = hashlib.pbkdf2_hmac(
+            "sha256",
+            supplied_s.encode("utf-8"),
+            salt,
+            iterations,
+            dklen=len(expected_hash),
+        )
         return hmac.compare_digest(dk, expected_hash)
 
     return hmac.compare_digest(supplied_s, expected_s)
 
 
-def hash_password_pbkdf2(password: str, *, iterations: int = 210_000, salt_bytes: int = 16) -> str:
+def hash_password_pbkdf2(
+    password: str, *, iterations: int = 210_000, salt_bytes: int = 16
+) -> str:
     salt = secrets.token_bytes(max(8, int(salt_bytes)))
-    dk = hashlib.pbkdf2_hmac("sha256", str(password or "").encode("utf-8"), salt, max(10_000, int(iterations)), dklen=32)
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        str(password or "").encode("utf-8"),
+        salt,
+        max(10_000, int(iterations)),
+        dklen=32,
+    )
     return f"pbkdf2_sha256${max(10_000, int(iterations))}${_b64url_encode(salt)}${_b64url_encode(dk)}"
 
+
+def _b32_decode(data: str) -> bytes:
+    s = (data or "").strip().replace(" ", "").upper()
+    if not s:
+        raise AuthError("Missing TOTP secret")
+    pad = "=" * (-len(s) % 8)
+    try:
+        return base64.b32decode(s + pad, casefold=True)
+    except Exception as e:
+        raise AuthError(f"Invalid base32 TOTP secret: {e}")
+
+
+def totp_generate_secret(*, bytes_len: int = 20) -> str:
+    raw = secrets.token_bytes(max(10, int(bytes_len)))
+    return base64.b32encode(raw).decode("ascii").rstrip("=")
+
+
+def totp_code(
+    *, secret_b32: str, at_time: Optional[int] = None, step_s: int = 30, digits: int = 6
+) -> str:
+    step = max(5, int(step_s))
+    digs = max(6, min(10, int(digits)))
+    t = int(time.time()) if at_time is None else int(at_time)
+
+    key = _b32_decode(secret_b32)
+    counter = int(t // step)
+    msg = counter.to_bytes(8, "big")
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    off = digest[-1] & 0x0F
+    code_int = (int.from_bytes(digest[off : off + 4], "big") & 0x7FFFFFFF) % (10**digs)
+    return str(code_int).zfill(digs)
+
+
+def totp_verify(
+    *,
+    secret_b32: str,
+    code: str,
+    at_time: Optional[int] = None,
+    step_s: int = 30,
+    digits: int = 6,
+    window_steps: int = 1,
+) -> bool:
+    supplied = "".join([c for c in str(code or "").strip() if c.isdigit()])
+    if not supplied:
+        return False
+    t = int(time.time()) if at_time is None else int(at_time)
+    win = max(0, int(window_steps))
+    step = max(5, int(step_s))
+    digs = max(6, min(10, int(digits)))
+    if len(supplied) != digs:
+        return False
+
+    for w in range(-win, win + 1):
+        expected = totp_code(
+            secret_b32=secret_b32, at_time=t + (w * step), step_s=step, digits=digs
+        )
+        if hmac.compare_digest(supplied, expected):
+            return True
+    return False
+
+
+def totp_provisioning_uri(
+    *, issuer: str, account: str, secret_b32: str, digits: int = 6, period_s: int = 30
+) -> str:
+    iss = (issuer or "").strip() or "wled-show-agent"
+    acct = (account or "").strip() or "admin"
+    secret = (secret_b32 or "").strip().replace(" ", "")
+    digs = max(6, min(10, int(digits)))
+    per = max(5, int(period_s))
+    label = f"{iss}:{acct}"
+    # Basic otpauth URI (RFC 6238 / Google Authenticator conventions)
+    from urllib.parse import quote
+
+    return (
+        "otpauth://totp/"
+        + quote(label)
+        + f"?secret={quote(secret)}&issuer={quote(iss)}&algorithm=SHA1&digits={digs}&period={per}"
+    )

@@ -54,7 +54,9 @@ class E131Sender:
         self._framing_flags_len = 0x7000 | (86 + self._slots_len)
         self._root_flags_len = 0x7000 | (108 + self._slots_len)
 
-        name = (cfg.source_name or "wled-show-agent").encode("utf-8", errors="ignore")[:64]
+        name = (cfg.source_name or "wled-show-agent").encode("utf-8", errors="ignore")[
+            :64
+        ]
         self._source_name = name + (b"\x00" * (64 - len(name)))
         self._cid = uuid.uuid4().bytes  # 16 bytes
 
@@ -130,4 +132,3 @@ class E131Sender:
         )
 
         return root + framing + dmp
-

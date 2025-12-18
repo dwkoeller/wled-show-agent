@@ -64,14 +64,18 @@ def prepare_ddp_params(
         if direction is not None:
             if "speed" in p:
                 try:
-                    p["speed"] = orientation.signed_speed_for_direction(direction, float(p.get("speed")))
+                    p["speed"] = orientation.signed_speed_for_direction(
+                        direction, float(p.get("speed"))
+                    )
                 except Exception:
                     pass
             else:
                 # Provide a default speed with the correct sign.
                 base = DEFAULT_SPEEDS.get(pat)
                 if base is not None:
-                    p["speed"] = orientation.signed_speed_for_direction(direction, float(base))
+                    p["speed"] = orientation.signed_speed_for_direction(
+                        direction, float(base)
+                    )
 
         # Start position -> phase offset (segment-order offset). Only for patterns that support it.
         if pat in PHASE_OFFSET_PATTERNS and "phase_offset" not in p:

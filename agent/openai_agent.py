@@ -19,6 +19,7 @@ class SimpleDirectorAgent:
 
     You provide a dict of tool_name -> callable(kwargs)->Any.
     """
+
     def __init__(
         self,
         *,
@@ -56,11 +57,21 @@ class SimpleDirectorAgent:
                     "type": "object",
                     "properties": {
                         "pattern": {"type": "string"},
-                        "duration_s": {"type": "number", "minimum": 0.1, "maximum": 600},
+                        "duration_s": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 600,
+                        },
                         "brightness": {"type": "integer", "minimum": 1, "maximum": 255},
                         "fps": {"type": "number", "minimum": 1, "maximum": 60},
-                        "direction": {"type": "string", "description": "Rotation direction from street: cw or ccw"},
-                        "start_pos": {"type": "string", "description": "Start position from street: front/right/back/left"},
+                        "direction": {
+                            "type": "string",
+                            "description": "Rotation direction from street: cw or ccw",
+                        },
+                        "start_pos": {
+                            "type": "string",
+                            "description": "Start position from street: front/right/back/left",
+                        },
                         "params": {"type": "object"},
                     },
                     "required": ["pattern"],
@@ -85,7 +96,11 @@ class SimpleDirectorAgent:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "total_looks": {"type": "integer", "minimum": 50, "maximum": 5000},
+                        "total_looks": {
+                            "type": "integer",
+                            "minimum": 50,
+                            "maximum": 5000,
+                        },
                         "themes": {"type": "array", "items": {"type": "string"}},
                         "brightness": {"type": "integer", "minimum": 1, "maximum": 255},
                         "seed": {"type": "integer"},
@@ -100,11 +115,18 @@ class SimpleDirectorAgent:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "file": {"type": "string", "description": "Sequence filename from /v1/sequences/list"},
+                        "file": {
+                            "type": "string",
+                            "description": "Sequence filename from /v1/sequences/list",
+                        },
                         "loop": {"type": "boolean"},
                         "targets": {"type": "array", "items": {"type": "string"}},
                         "include_self": {"type": "boolean"},
-                        "timeout_s": {"type": "number", "minimum": 0.1, "maximum": 30.0},
+                        "timeout_s": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 30.0,
+                        },
                     },
                     "required": ["file"],
                 },
@@ -207,7 +229,10 @@ class SimpleDirectorAgent:
             input=[
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": "Tools executed."},
-                {"role": "tool", "content": json.dumps([tr.__dict__ for tr in tool_results])},
+                {
+                    "role": "tool",
+                    "content": json.dumps([tr.__dict__ for tr in tool_results]),
+                },
             ],
         )
 
@@ -221,6 +246,8 @@ class SimpleDirectorAgent:
 
         return {
             "ok": True,
-            "tool_results": [{"tool": tr.name, "output": tr.output} for tr in tool_results],
+            "tool_results": [
+                {"tool": tr.name, "output": tr.output} for tr in tool_results
+            ],
             "response": text2.strip() or "Done.",
         }

@@ -1,4 +1,4 @@
-# Christmas Show Agent v0.4
+# WLED Show Agent
 
 Local-first **show director + pattern/sequence generator** for a WLED mega tree.
 
@@ -8,7 +8,9 @@ Runs as a single FastAPI service in Docker (works great on a Proxmox VM/LXC) and
 - **Optionally import some looks as WLED presets** (careful: WLED presets are limited)
 - **Generate + play timed sequences** (deterministic cue lists)
 - **Stream realtime procedural animations over DDP** (UDP 4048)
-- **(Optional) Natural language control** via OpenAI tool-calling (`/v1/command`)
+- **Export renderable sequences to `.fseq`** (procedural `ddp` steps only)
+- **Analyze audio for BPM + beats** (writes `beats.json`)
+- **(Optional) Natural language control** via OpenAI tool-calling or local commands (`/v1/command`)
 
 This repo is designed for **LAN use only**.
 
@@ -24,7 +26,7 @@ Think of it as two planes:
 The “agentic” part is optional:
 
 - If you set `OPENAI_API_KEY`, `/v1/command` becomes a tool-using director that decides which local actions to take.
-- Without OpenAI, the generator/sequence/DDP endpoints still work.
+- Without OpenAI, `/v1/command` supports a small local command set (and the generator/sequence/DDP endpoints still work).
 
 ---
 
@@ -38,22 +40,27 @@ The “agentic” part is optional:
 
 ## Quick start (Docker)
 
-1) Download the repo zip and unzip it
+1. Download the repo zip and unzip it
 
-2) Create your `.env`
+2. Create your `.env`
 
 ```bash
 cp .env.example .env
 # edit .env and set at minimum: WLED_TREE_URL
 ```
 
-3) Start the service
+3. Start the service
 
 ```bash
 docker compose up -d --build
 ```
 
-4) Open the API docs (Swagger UI)
+This starts 2 containers:
+
+- `ui` (Nginx) serves `/ui/*` and proxies `/v1/*` + `/docs` to the API
+- `api` (FastAPI) runs the agent backend
+
+4. Open the API docs (Swagger UI)
 
 - `http://<host>:8088/docs`
 
@@ -61,7 +68,12 @@ Optional: open the mobile-friendly UI:
 
 - `http://<host>:8088/ui`
 
-5) Sanity check
+Mobile install (PWA):
+
+- On iOS/Android, open `/ui` and use “Add to Home Screen” (installable web app).
+- For voice input + secure cookies on phones, HTTPS is strongly recommended (see “HTTPS on LAN” below).
+
+5. Sanity check
 
 ```bash
 curl -sS http://<host>:8088/v1/health
@@ -153,16 +165,17 @@ When enabled, the director can call tools like:
 
 ### Web UI + local auth (optional)
 
-- The built-in UI is at `GET /ui` (single-page, mobile friendly).
+- The UI is a **React + MUI + TypeScript** single-page app served at `GET /ui` (mobile friendly, includes text + voice command input).
 - To enable local login (service-issued JWT cookie):
   - `AUTH_ENABLED=true`
   - `AUTH_USERNAME` / `AUTH_PASSWORD`
   - `AUTH_JWT_SECRET` (HMAC secret for HS256)
+  - Optional 2FA: `AUTH_TOTP_ENABLED=true` + `AUTH_TOTP_SECRET` (base32)
 
 Notes:
 
 - When `AUTH_ENABLED=true`, all endpoints require either a valid JWT (cookie or `Authorization: Bearer <jwt>`) or the configured `X-A2A-Key` (if you also use A2A/fleet).
-- `GET /v1/health`, `POST /v1/auth/login`, `POST /v1/auth/logout`, and `GET /ui` remain accessible without a token so you can sign in.
+- `GET /v1/health`, `GET /v1/auth/config`, `POST /v1/auth/login`, `POST /v1/auth/logout`, and `GET /ui/*` remain accessible without a token so you can sign in.
 - Generate a JWT secret:
 
 ```bash
@@ -173,6 +186,12 @@ python -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 ```bash
 python -c 'import sys; sys.path.insert(0,"agent"); from auth import hash_password_pbkdf2; print(hash_password_pbkdf2("changeme"))'
+```
+
+- Optional: generate a TOTP secret for `AUTH_TOTP_SECRET`:
+
+```bash
+python -c 'import sys; sys.path.insert(0,"agent"); from auth import totp_generate_secret; print(totp_generate_secret())'
 ```
 
 ### Falcon Player (FPP) (optional)
@@ -203,12 +222,12 @@ If you call `/v1/command` every **10 minutes** while the show runs:
 
 Approx cost for that 40‑day run (using the token prices you provided):
 
-| Model | Input $/1M | Output $/1M | Cost for 1440 calls |
-| --- | ---:| ---:| ---:|
-| `gpt-5-nano` | 0.05 | 0.40 | **$0.08–$0.23** |
-| `gpt-5-mini` | 0.25 | 2.00 | **$0.40–$1.15** |
-| `gpt-5` | 1.25 | 10.00 | **$1.98–$5.76** |
-| `gpt-5.2` | 1.75 | 14.00 | **$2.77–$8.06** |
+| Model        | Input $/1M | Output $/1M | Cost for 1440 calls |
+| ------------ | ---------: | ----------: | ------------------: |
+| `gpt-5-nano` |       0.05 |        0.40 |     **$0.08–$0.23** |
+| `gpt-5-mini` |       0.25 |        2.00 |     **$0.40–$1.15** |
+| `gpt-5`      |       1.25 |       10.00 |     **$1.98–$5.76** |
+| `gpt-5.2`    |       1.75 |       14.00 |     **$2.77–$8.06** |
 
 Practical recommendation:
 
@@ -293,7 +312,20 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 ### xLights helpers (optional)
 
 - `POST /v1/xlights/import_networks` – best-effort import of `xlights_networks.xml` to a show config skeleton
+- `POST /v1/xlights/import_project` – import an xLights project folder (networks + model channel ranges)
+- `POST /v1/xlights/import_sequence` – extract a timing/beat grid from an xLights `.xsq` (no effect data)
 - `POST /v1/show/config/load` – load a show config JSON from `DATA_DIR`
+
+### Jobs + progress (UI uses this)
+
+- `GET /v1/jobs` – list recent jobs
+- `GET /v1/jobs/stream` – Server-Sent Events (SSE) stream of job updates
+- `POST /v1/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
+
+### File helpers (UI uses this)
+
+- `GET /v1/files/list` – list files under `DATA_DIR`
+- `GET /v1/files/download` – download a file under `DATA_DIR`
 
 ---
 
@@ -369,6 +401,21 @@ curl -sS http://localhost:8088/v1/sequences/generate \
     "duration_s": 240,
     "step_s": 8,
     "include_ddp": true,
+    "seed": 1337
+  }' | jq
+```
+
+Generate a beat-aligned sequence (uses `beats.json` from `/v1/audio/analyze` or `/v1/xlights/import_sequence`):
+
+```bash
+curl -sS http://localhost:8088/v1/sequences/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"BeatMix",
+    "duration_s": 240,
+    "include_ddp": true,
+    "beats_file":"audio/beats.json",
+    "beats_per_step": 4,
     "seed": 1337
   }' | jq
 ```
@@ -452,7 +499,7 @@ curl -sS http://localhost:8088/v1/command \
 
 ## Multi-controller setup (tree + rooflines)
 
-Run one container per controller (tree, rooflines, props). Each instance exposes `/v1/a2a/*`.
+Run one **API container per controller** (tree, rooflines, props). The coordinator also runs a separate `ui` reverse-proxy container that serves `/ui/*` and proxies `/v1/*` to the coordinator API.
 
 An example multi-agent compose file is included: `docker-compose.fleet.yml`.
 
@@ -483,17 +530,18 @@ On the agent you want to use as the **fleet coordinator** (often the tree), set:
 
 Keep controllers on static IPs in your `172.16.200.0/24` LAN/VLAN. Example device plan:
 
-| Prop | Controller | Device IP | Agent service | Host port | Env file |
-| --- | --- | --- | --- | --- | --- |
-| Mega tree | WLED | `172.16.200.50` | `tree` | `8088` | `.env.tree` |
-| Roofline 1st floor | WLED | `172.16.200.51` | `roofline1` | `8089` | `.env.roofline1` |
-| Roofline 2nd floor | WLED | `172.16.200.52` | `roofline2` | `8090` | `.env.roofline2` |
-| Star (WLED) | WLED | `172.16.200.53` | `star_wled` | `8091` | `.env.star_wled` |
-| Star (ESPixelStick) | sACN/Art‑Net | `172.16.200.60` | `star_esps` | `8092` | `.env.star_esps` |
-| Scheduler (optional) | Falcon Player | `172.16.200.20` | — | — | (set `FPP_BASE_URL` on coordinator) |
+| Prop                 | Controller    | Device IP       | Agent service | Host port | Env file                            |
+| -------------------- | ------------- | --------------- | ------------- | --------- | ----------------------------------- |
+| Mega tree            | WLED          | `172.16.200.50` | `tree`        | `8088`    | `.env.tree`                         |
+| Roofline 1st floor   | WLED          | `172.16.200.51` | `roofline1`   | `8089`    | `.env.roofline1`                    |
+| Roofline 2nd floor   | WLED          | `172.16.200.52` | `roofline2`   | `8090`    | `.env.roofline2`                    |
+| Star (WLED)          | WLED          | `172.16.200.53` | `star_wled`   | `8091`    | `.env.star_wled`                    |
+| Star (ESPixelStick)  | sACN/Art‑Net  | `172.16.200.60` | `star_esps`   | `8092`    | `.env.star_esps`                    |
+| Scheduler (optional) | Falcon Player | `172.16.200.20` | —             | —         | (set `FPP_BASE_URL` on coordinator) |
 
 Notes:
 
+- In `docker-compose.fleet.yml`, host port `8088` is served by the `ui` container (reverse proxy) which forwards `/v1/*` to the coordinator API.
 - `WLED_TREE_URL` / `PIXEL_HOST` always point at the physical device IPs.
 - `A2A_PEERS` can use docker service DNS names (as shown) when everything runs in one compose stack.
 
@@ -549,7 +597,7 @@ Recommended approach: treat **FPP as the scheduler/timebase (audio + calendar)**
 
 Trigger a generated sequence across the whole fleet:
 
-1) Generate a sequence on the coordinator:
+1. Generate a sequence on the coordinator:
 
 ```bash
 curl -sS http://localhost:8088/v1/sequences/generate \
@@ -557,7 +605,7 @@ curl -sS http://localhost:8088/v1/sequences/generate \
   -d '{"name":"ShowMix","duration_s":240,"step_s":8,"include_ddp":true,"seed":1337}' | jq
 ```
 
-2) Start it across the fleet:
+2. Start it across the fleet:
 
 ```bash
 curl -sS http://localhost:8088/v1/fleet/sequences/start \
@@ -565,7 +613,7 @@ curl -sS http://localhost:8088/v1/fleet/sequences/start \
   -d '{"file":"<sequence filename from /v1/sequences/list>","loop":false}' | jq
 ```
 
-3) Export an FPP script to trigger that sequence:
+3. Export an FPP script to trigger that sequence:
 
 ```bash
 curl -sS http://localhost:8088/v1/fpp/export/fleet_sequence_start_script \
@@ -588,8 +636,8 @@ Set `FPP_BASE_URL` (and optionally `FPP_HEADERS_JSON`) on the coordinator, then 
 
 #### 3) xLights helpers (best-effort)
 
-- Place `xlights_networks.xml` under the coordinator’s data dir (example: `./data/tree/xlights/xlights_networks.xml`).
-- Import to a show-config skeleton:
+- Place `xlights_networks.xml` (and optionally `xlights_rgbeffects.xml`) under the coordinator’s data dir (example: `./data/tree/xlights/`).
+- Import networks-only to a show-config skeleton:
 
 ```bash
 curl -sS http://localhost:8088/v1/xlights/import_networks \
@@ -603,15 +651,48 @@ curl -sS http://localhost:8088/v1/xlights/import_networks \
   }' | jq
 ```
 
+Import an entire xLights project folder (networks + model channel ranges):
+
+```bash
+curl -sS http://localhost:8088/v1/xlights/import_project \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_dir":"xlights",
+    "out_file":"show/show_config_xlights_project.json",
+    "include_controllers":true,
+    "include_models":true
+  }' | jq
+```
+
+Import a timing/beat grid from an xLights `.xsq` (for beat-aligned sequence generation):
+
+```bash
+curl -sS http://localhost:8088/v1/xlights/import_sequence \
+  -H "Content-Type: application/json" \
+  -d '{
+    "xsq_file":"xlights/song.xsq",
+    "timing_track":"Beat",
+    "out_file":"audio/beats_xlights.json"
+  }' | jq
+```
+
 Limitations right now:
 
-- This project does **not** export `.fseq` sequences yet; the “publish” path is **FPP scripts → agent fleet**.
-- xLights model/channel import is not complete; `xlights_networks.xml` import is a starting point for planning.
+- `.fseq` export is supported for **renderable** sequences only (procedural `ddp` steps). Steps of type `look` (WLED JSON states) are not offline-renderable into frames.
+- `.fseq` upload to FPP is supported via `POST /v1/fpp/upload_file` (uploads into `sequences/` by default).
+- xLights import is best-effort (networks + model channel ranges); `.xsq` import is limited to timing/beat grids only (no xLights effect data).
 
 Future opportunity (music sync):
 
-- Add an offline audio analyzer (mp3/wav/ogg) that extracts BPM + beat timestamps (e.g., via `aubio`/`librosa`) and writes a `beats.json` timeline.
-- Teach the sequence generator to align step boundaries / pattern speed changes to that beat grid, then let FPP trigger the sequence start so audio + visuals share a common timebase.
+- The sequence generator supports beat-aligned step boundaries via `beats_file`; a future improvement is to align **pattern parameters** (speed, direction changes, palette switches) to the beat grid too, then let FPP trigger the sequence start so audio + visuals share a common timebase.
+
+Audio analyzer (beats/BPM):
+
+```bash
+curl -sS http://localhost:8088/v1/audio/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"audio_file":"music/song.wav","out_file":"audio/beats.json"}' | jq
+```
 
 OpenAI (optional):
 
@@ -646,6 +727,8 @@ curl -sS http://localhost:8088/v1/fleet/stop_all \
 
 - `./data/looks/looks_pack_*.jsonl` – newline-delimited JSON look states
 - `./data/sequences/sequence_*.json` – generated cue lists
+- `./data/fseq/*.fseq` – exported `.fseq` files (renderable sequences only)
+- `./data/audio/beats.json` – audio BPM + beat timestamps
 
 Safe to delete any time.
 
@@ -656,6 +739,39 @@ Safe to delete any time.
 - Keep this service private on your LAN (it can control your lights).
 - Use `WLED_MAX_BRI` to protect your power setup.
 - Keep `WLED_COMMAND_COOLDOWN_MS` > 0 to avoid rapid-fire updates.
+
+---
+
+## HTTPS on LAN (recommended for mobile voice + secure cookies)
+
+Browsers commonly require a **secure context** (HTTPS) for microphone permissions, and `AUTH_COOKIE_SECURE=true` requires HTTPS.
+
+1. Set:
+
+- `AUTH_ENABLED=true`
+- `AUTH_JWT_SECRET=...`
+- `AUTH_COOKIE_SECURE=true`
+
+2. Put a TLS terminator (Caddy/Traefik) in front of the `ui` container.
+
+### Caddy (self-signed, easiest)
+
+Example `Caddyfile` for a Docker network (proxy to the `ui` service):
+
+```caddyfile
+wsa.local {
+  tls internal
+  reverse_proxy ui:80
+}
+```
+
+Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
+
+### Traefik (outline)
+
+- Route a `websecure` router to the `ui` service on port `80`.
+- Use Traefik’s TLS options/certs (self-signed or your own CA).
+- Keep forwarding headers (`X-Forwarded-Proto`) so the app can make correct security decisions.
 
 ---
 
@@ -678,6 +794,24 @@ Safe to delete any time.
 ---
 
 ## Development
+
+UI dev server (mobile-friendly React app):
+
+```bash
+cd agent/ui
+npm install
+npm run dev
+# open http://localhost:5173/ui/ (Vite proxies /v1 to http://localhost:8088)
+```
+
+UI E2E tests (Playwright):
+
+```bash
+cd agent/ui
+npm install
+npx playwright install
+npm run test:e2e
+```
 
 Run unit tests (no WLED/FPP required):
 

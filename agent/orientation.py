@@ -107,11 +107,15 @@ def infer_orientation(
     right_sid = int(right_segment_id)
     if right_sid not in [int(x) for x in ordered_segment_ids]:
         right_sid = int(ordered_segment_ids[0])
-        notes.append("RIGHT_SEGMENT_ID not found; defaulting right to first ordered segment.")
+        notes.append(
+            "RIGHT_SEGMENT_ID not found; defaulting right to first ordered segment."
+        )
 
     # Only a clean mapping for 4 segments.
     if len(ordered_segment_ids) != 4:
-        notes.append("Orientation mapping is only exact for 4 segments; returning unknown mapping.")
+        notes.append(
+            "Orientation mapping is only exact for 4 segments; returning unknown mapping."
+        )
         return OrientationInfo(
             kind="unknown",
             ordered_segment_ids=[int(x) for x in ordered_segment_ids],

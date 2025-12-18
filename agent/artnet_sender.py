@@ -74,8 +74,9 @@ class ArtNetSender:
                 + struct.pack("<H", 0x5000)  # OpCode ArtDMX (little-endian)
                 + struct.pack(">H", 14)  # ProtVer (big-endian)
                 + struct.pack("BB", seq & 0xFF, 0)  # Seq, Physical
-                + struct.pack("<H", universe & 0xFFFF)  # Universe (Port-Address), little-endian
+                + struct.pack(
+                    "<H", universe & 0xFFFF
+                )  # Universe (Port-Address), little-endian
                 + struct.pack(">H", len(chunk) & 0xFFFF)  # Length, big-endian
             )
             self._sock.sendto(header + chunk, (self.cfg.host, int(self.cfg.port)))
-

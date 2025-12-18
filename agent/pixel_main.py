@@ -6,7 +6,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from auth import AuthError, jwt_decode_hs256, jwt_encode_hs256, verify_password
+from auth import (
+    AuthError,
+    jwt_decode_hs256,
+    jwt_encode_hs256,
+    totp_verify,
+    verify_password,
+)
 from config import Settings, load_settings
 from geometry import TreeGeometry
 from patterns import PatternFactory
@@ -20,13 +26,19 @@ SETTINGS: Settings = load_settings()
 if SETTINGS.controller_kind != "pixel":
     raise RuntimeError("pixel_main requires CONTROLLER_KIND=pixel")
 
+
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
     if not SETTINGS.auth_enabled:
         return await call_next(request)
 
     path = request.url.path or ""
-    if path.startswith("/v1/health") or path.startswith("/v1/auth/login") or path.startswith("/v1/auth/logout"):
+    if (
+        path.startswith("/v1/health")
+        or path.startswith("/v1/auth/config")
+        or path.startswith("/v1/auth/login")
+        or path.startswith("/v1/auth/logout")
+    ):
         return await call_next(request)
 
     if request.method.upper() == "OPTIONS":
@@ -45,7 +57,11 @@ async def _auth_middleware(request: Request, call_next):  # type: ignore[no-unty
     tok = _jwt_from_request(request)
     if tok:
         try:
-            jwt_decode_hs256(tok, secret=str(SETTINGS.auth_jwt_secret or ""), issuer=str(SETTINGS.auth_jwt_issuer or ""))
+            jwt_decode_hs256(
+                tok,
+                secret=str(SETTINGS.auth_jwt_secret or ""),
+                issuer=str(SETTINGS.auth_jwt_issuer or ""),
+            )
             return await call_next(request)
         except AuthError:
             pass
@@ -73,7 +89,11 @@ def _require_a2a_auth(
         if not tok:
             raise HTTPException(status_code=401, detail="Missing token")
         try:
-            jwt_decode_hs256(tok, secret=str(SETTINGS.auth_jwt_secret or ""), issuer=str(SETTINGS.auth_jwt_issuer or ""))
+            jwt_decode_hs256(
+                tok,
+                secret=str(SETTINGS.auth_jwt_secret or ""),
+                issuer=str(SETTINGS.auth_jwt_issuer or ""),
+            )
             return
         except AuthError as e:
             raise HTTPException(status_code=401, detail=str(e))
@@ -115,8 +135,13 @@ class DDPStartRequest(BaseModel):
     duration_s: float = Field(30.0, ge=0.1, le=600.0)
     brightness: int = Field(128, ge=1, le=255)
     fps: Optional[float] = Field(default=None, ge=1.0, le=60.0)
-    direction: Optional[str] = Field(default=None, description="Optional: cw or ccw (passed through as param)")
-    start_pos: Optional[str] = Field(default=None, description="Optional: front/right/back/left (passed through as param)")
+    direction: Optional[str] = Field(
+        default=None, description="Optional: cw or ccw (passed through as param)"
+    )
+    start_pos: Optional[str] = Field(
+        default=None,
+        description="Optional: front/right/back/left (passed through as param)",
+    )
 
 
 class A2AInvokeRequest(BaseModel):
@@ -128,6 +153,7 @@ class A2AInvokeRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     username: str
     password: str
+    totp: Optional[str] = None
 
 
 def _jwt_from_request(request: Request) -> str | None:
@@ -146,7 +172,9 @@ def _jwt_from_request(request: Request) -> str | None:
 
 def _require_jwt_auth(request: Request) -> Dict[str, Any]:
     if not SETTINGS.auth_enabled:
-        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false; JWT auth is not configured.")
+        raise HTTPException(
+            status_code=400, detail="AUTH_ENABLED is false; JWT auth is not configured."
+        )
     tok = _jwt_from_request(request)
     if not tok:
         raise HTTPException(status_code=401, detail="Missing token")
@@ -156,20 +184,44 @@ def _require_jwt_auth(request: Request) -> Dict[str, Any]:
             secret=str(SETTINGS.auth_jwt_secret or ""),
             issuer=str(SETTINGS.auth_jwt_issuer or ""),
         )
-        return {"subject": claims.subject, "expires_at": claims.expires_at, "issued_at": claims.issued_at, "claims": claims.raw}
+        return {
+            "subject": claims.subject,
+            "expires_at": claims.expires_at,
+            "issued_at": claims.issued_at,
+            "claims": claims.raw,
+        }
     except AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+
+@app.get("/v1/auth/config")
+def auth_config() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "version": app.version,
+        "auth_enabled": bool(SETTINGS.auth_enabled),
+        "totp_enabled": bool(SETTINGS.auth_totp_enabled),
+        "openai_enabled": False,
+        "fpp_enabled": False,
+    }
 
 
 @app.post("/v1/auth/login")
 def auth_login(req: AuthLoginRequest, response: Response) -> Dict[str, Any]:
     if not SETTINGS.auth_enabled:
-        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false; login is disabled.")
+        raise HTTPException(
+            status_code=400, detail="AUTH_ENABLED is false; login is disabled."
+        )
     user = (req.username or "").strip()
     if user != (SETTINGS.auth_username or "").strip():
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not verify_password(req.password, str(SETTINGS.auth_password or "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    if SETTINGS.auth_totp_enabled:
+        if not totp_verify(
+            secret_b32=str(SETTINGS.auth_totp_secret or ""), code=str(req.totp or "")
+        ):
+            raise HTTPException(status_code=401, detail="Invalid TOTP code")
 
     token = jwt_encode_hs256(
         {"sub": user, "role": "admin"},
@@ -187,7 +239,12 @@ def auth_login(req: AuthLoginRequest, response: Response) -> Dict[str, Any]:
         max_age=int(SETTINGS.auth_jwt_ttl_s),
         path="/",
     )
-    return {"ok": True, "user": {"username": user}, "token": token, "expires_in": int(SETTINGS.auth_jwt_ttl_s)}
+    return {
+        "ok": True,
+        "user": {"username": user},
+        "token": token,
+        "expires_in": int(SETTINGS.auth_jwt_ttl_s),
+    }
 
 
 @app.post("/v1/auth/logout")
@@ -200,7 +257,11 @@ def auth_logout(response: Response) -> Dict[str, Any]:
 @app.get("/v1/auth/me")
 def auth_me(request: Request) -> Dict[str, Any]:
     info = _require_jwt_auth(request)
-    return {"ok": True, "user": {"username": info["subject"]}, "expires_at": info["expires_at"]}
+    return {
+        "ok": True,
+        "user": {"username": info["subject"]},
+        "expires_at": info["expires_at"],
+    }
 
 
 def _action_start_pattern(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,9 +299,19 @@ _CAPABILITIES: List[Dict[str, Any]] = [
     {
         "action": "start_ddp_pattern",
         "description": "Start a realtime procedural pattern stream (sACN/Art-Net) for a duration.",
-        "params": {"pattern": "string", "params": "object", "duration_s": "number", "brightness": "int", "fps": "number"},
+        "params": {
+            "pattern": "string",
+            "params": "object",
+            "duration_s": "number",
+            "brightness": "int",
+            "fps": "number",
+        },
     },
-    {"action": "stop_ddp", "description": "Stop any running realtime stream.", "params": {}},
+    {
+        "action": "stop_ddp",
+        "description": "Stop any running realtime stream.",
+        "params": {},
+    },
     {"action": "stop_all", "description": "Alias for stop_ddp.", "params": {}},
     {"action": "status", "description": "Get current stream status.", "params": {}},
 ]
@@ -260,8 +331,14 @@ def health() -> Dict[str, Any]:
 
 @app.get("/v1/ddp/patterns")
 def ddp_patterns() -> Dict[str, Any]:
-    factory = PatternFactory(led_count=SETTINGS.pixel_count, geometry=GEOM, segment_layout=None)
-    return {"ok": True, "patterns": factory.available(), "geometry_enabled": GEOM.enabled_for(SETTINGS.pixel_count)}
+    factory = PatternFactory(
+        led_count=SETTINGS.pixel_count, geometry=GEOM, segment_layout=None
+    )
+    return {
+        "ok": True,
+        "patterns": factory.available(),
+        "geometry_enabled": GEOM.enabled_for(SETTINGS.pixel_count),
+    }
 
 
 @app.get("/v1/ddp/status")
@@ -320,13 +397,29 @@ def a2a_card(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
 
 
 @app.post("/v1/a2a/invoke")
-def a2a_invoke(req: A2AInvokeRequest, _: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
+def a2a_invoke(
+    req: A2AInvokeRequest, _: None = Depends(_require_a2a_auth)
+) -> Dict[str, Any]:
     action = (req.action or "").strip()
     fn = _ACTIONS.get(action)
     if fn is None:
-        return {"ok": False, "request_id": req.request_id, "error": f"Unknown action '{action}'"}
+        return {
+            "ok": False,
+            "request_id": req.request_id,
+            "error": f"Unknown action '{action}'",
+        }
     try:
         res = fn(dict(req.params or {}))
-        return {"ok": True, "request_id": req.request_id, "action": action, "result": res}
+        return {
+            "ok": True,
+            "request_id": req.request_id,
+            "action": action,
+            "result": res,
+        }
     except Exception as e:
-        return {"ok": False, "request_id": req.request_id, "action": action, "error": str(e)}
+        return {
+            "ok": False,
+            "request_id": req.request_id,
+            "action": action,
+            "error": str(e),
+        }

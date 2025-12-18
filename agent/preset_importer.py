@@ -66,16 +66,22 @@ class PresetImporter:
                     bri = int(state.get("bri", self.max_bri))
                     state["bri"] = min(self.max_bri, max(1, bri))
 
-                name = row.get("name") or row.get("spec", {}).get("name") or f"Look {imported+1}"
+                name = (
+                    row.get("name")
+                    or row.get("spec", {}).get("name")
+                    or f"Look {imported+1}"
+                )
                 preset_name = f"{name_prefix} {name}".strip()[:48]  # keep short
                 # One-call save: include state + psave
                 payload = dict(state)
-                payload.update({
-                    "psave": cur_id,
-                    "n": preset_name,
-                    "ib": bool(include_brightness),
-                    "sb": bool(save_bounds),
-                })
+                payload.update(
+                    {
+                        "psave": cur_id,
+                        "n": preset_name,
+                        "ib": bool(include_brightness),
+                        "sb": bool(save_bounds),
+                    }
+                )
                 self.cooldown.wait()
                 self.wled.apply_state(payload, verbose=False)
                 imported += 1
@@ -86,4 +92,6 @@ class PresetImporter:
                 errors.append(f"Row {imported+1}: {e}")
 
         stop_id = cur_id - 1
-        return ImportResult(imported=imported, start_id=int(start_id), stop_id=stop_id, errors=errors)
+        return ImportResult(
+            imported=imported, start_id=int(start_id), stop_id=stop_id, errors=errors
+        )

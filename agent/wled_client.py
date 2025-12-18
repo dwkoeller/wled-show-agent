@@ -75,7 +75,11 @@ class WLEDClient:
         return self.get_json("/json/state")
 
     def get_segments(self, *, refresh: bool = False) -> List[Dict[str, Any]]:
-        st = self.get_state() if refresh or self._segment_ids_cache is None else self.get_state()
+        st = (
+            self.get_state()
+            if refresh or self._segment_ids_cache is None
+            else self.get_state()
+        )
         seg = st.get("seg", [])
         if not isinstance(seg, list):
             return []
@@ -151,7 +155,9 @@ class WLEDClient:
         return self.post_json("/json/state", payload)
 
     def set_preset(self, preset_id: int, *, verbose: bool = False) -> Any:
-        return self.apply_state({"ps": int(preset_id), "v": bool(verbose)}, verbose=False)
+        return self.apply_state(
+            {"ps": int(preset_id), "v": bool(verbose)}, verbose=False
+        )
 
     def turn_off(self) -> Any:
         return self.apply_state({"on": False})

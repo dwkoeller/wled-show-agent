@@ -1,12 +1,24 @@
 services:
+  ui:
+    build: ./agent/ui
+    ports:
+      - "8088:80"
+    depends_on:
+      - tree
+    restart: unless-stopped
+
   tree:
     build: ./agent
-    ports:
-      - "8088:8088"
     env_file:
       - .env.tree
     volumes:
       - ./data/tree:/data
+    expose:
+      - "8088"
+    networks:
+      default:
+        aliases:
+          - api
     restart: unless-stopped
 
   roofline1:
@@ -45,7 +57,8 @@ services:
       - "8092:8088"
     env_file:
       - .env.star_esps
-    command: ["uvicorn", "pixel_main:app", "--host", "0.0.0.0", "--port", "8088"]
+    command:
+      ["uvicorn", "pixel_main:app", "--host", "0.0.0.0", "--port", "8088"]
     volumes:
       - ./data/star_esps:/data
     restart: unless-stopped

@@ -1,0 +1,18 @@
+{
+  "name": "WLED Show Agent",
+  "short_name": "WLED Agent",
+  "description": "Local-first show director + pattern/sequence generator for WLED.",
+  "start_url": "/ui/",
+  "scope": "/ui/",
+  "display": "standalone",
+  "background_color": "#0b0f1a",
+  "theme_color": "#0b0f1a",
+  "icons": [
+    {
+      "src": "/ui/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

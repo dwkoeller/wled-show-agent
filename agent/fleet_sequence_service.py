@@ -84,7 +84,7 @@ class FleetSequenceService:
     def stop(self) -> FleetSequenceStatus:
         with self._lock:
             if not self._status.running:
-                return self.status()
+                return FleetSequenceStatus(**self._status.__dict__)
             self._stop.set()
             th = self._thread
         if th:
@@ -113,7 +113,9 @@ class FleetSequenceService:
         self.stop()
 
         steps = self._load_steps(file)
-        timeout_s_val = float(timeout_s) if timeout_s is not None else self.default_timeout_s
+        timeout_s_val = (
+            float(timeout_s) if timeout_s is not None else self.default_timeout_s
+        )
 
         # Resolve peer set up-front
         selected_peers: List[Any] = []
@@ -128,7 +130,9 @@ class FleetSequenceService:
         peer_caps: Dict[str, set[str]] = {}
         for peer in selected_peers:
             try:
-                peer_caps[getattr(peer, "name", str(peer))] = self.peer_supported_actions(peer, timeout_s_val)
+                peer_caps[getattr(peer, "name", str(peer))] = (
+                    self.peer_supported_actions(peer, timeout_s_val)
+                )
             except Exception:
                 peer_caps[getattr(peer, "name", str(peer))] = set()
 
@@ -155,10 +159,16 @@ class FleetSequenceService:
                             action = "apply_look_spec"
                             params = {"look_spec": step.get("look") or {}}
                             if step.get("brightness") is not None:
-                                params["brightness_override"] = int(step.get("brightness"))
+                                params["brightness_override"] = int(
+                                    step.get("brightness")
+                                )
                         elif typ == "ddp":
                             action = "start_ddp_pattern"
-                            params = {"pattern": str(step.get("pattern")), "params": step.get("params") or {}, "duration_s": dur}
+                            params = {
+                                "pattern": str(step.get("pattern")),
+                                "params": step.get("params") or {},
+                                "duration_s": dur,
+                            }
                             if step.get("brightness") is not None:
                                 params["brightness"] = int(step.get("brightness"))
                             if step.get("fps") is not None:
@@ -183,9 +193,17 @@ class FleetSequenceService:
                                     eligible.append(peer)
 
                             if eligible:
-                                with ThreadPoolExecutor(max_workers=min(8, len(eligible))) as ex:
+                                with ThreadPoolExecutor(
+                                    max_workers=min(8, len(eligible))
+                                ) as ex:
                                     futs = {
-                                        ex.submit(self.peer_invoke, peer, action, dict(params), timeout_s_val): peer
+                                        ex.submit(
+                                            self.peer_invoke,
+                                            peer,
+                                            action,
+                                            dict(params),
+                                            timeout_s_val,
+                                        ): peer
                                         for peer in eligible
                                     }
                                     for fut in as_completed(futs):

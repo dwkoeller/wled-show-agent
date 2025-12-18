@@ -50,17 +50,17 @@ def render_http_post_script(
         "  exit 1\n"
         "}\n"
         "curl_agent() {\n"
-        "  if [ -n \"$A2A_KEY\" ]; then\n"
-        "    curl -sS -H \"X-A2A-Key: $A2A_KEY\" \"$@\"\n"
+        '  if [ -n "$A2A_KEY" ]; then\n'
+        '    curl -sS -H "X-A2A-Key: $A2A_KEY" "$@"\n'
         "  else\n"
-        "    curl -sS \"$@\"\n"
+        '    curl -sS "$@"\n'
         "  fi\n"
         "}\n"
         f"PAYLOAD_B64='{payload_b64}'\n"
-        "PAYLOAD_JSON=\"$(b64dec \"$PAYLOAD_B64\")\"\n"
+        'PAYLOAD_JSON="$(b64dec "$PAYLOAD_B64")"\n'
         "curl_agent -H 'Content-Type: application/json' -X POST \"$AGENT_URL"
         + path
-        + "\" -d \"$PAYLOAD_JSON\"\n"
+        + '" -d "$PAYLOAD_JSON"\n'
     )
 
 
@@ -74,4 +74,6 @@ def write_script(*, out_dir: str, filename: str, script_text: str) -> ExportedSc
         p.chmod(0o755)
     except Exception:
         pass
-    return ExportedScript(filename=fname, rel_path=str(p), bytes_written=len(script_text.encode("utf-8")))
+    return ExportedScript(
+        filename=fname, rel_path=str(p), bytes_written=len(script_text.encode("utf-8"))
+    )

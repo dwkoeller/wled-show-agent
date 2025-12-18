@@ -5,9 +5,10 @@ import itertools
 import random
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from wled_mapper import WLEDMapper
+from jobs import JobCanceled
 
 
 RGB = Tuple[int, int, int]
@@ -44,6 +45,7 @@ class LookLibraryGenerator:
     Generates a LOT of looks as WLED-state "specs" that reference effect/palette by *name*.
     Those names are mapped to numeric IDs at apply/import time.
     """
+
     def __init__(self, *, mapper: WLEDMapper, seed: int = 1337) -> None:
         self.mapper = mapper
         self.rng = random.Random(seed)
@@ -127,13 +129,53 @@ class LookLibraryGenerator:
         avoid: List[str] = []
 
         if theme_l in ("classic", "candy_cane", "icy", "warm_white"):
-            kw += ["Twinkle", "Sparkle", "Dissolve", "Wipe", "Chase", "Scan", "Comet", "Fireworks", "Rain", "Merry", "Glitter"]
+            kw += [
+                "Twinkle",
+                "Sparkle",
+                "Dissolve",
+                "Wipe",
+                "Chase",
+                "Scan",
+                "Comet",
+                "Fireworks",
+                "Rain",
+                "Merry",
+                "Glitter",
+            ]
         if theme_l == "halloween":
-            kw += ["Halloween", "Lightning", "Fireworks", "Dissolve", "Chase", "Twinkle", "Ripple"]
+            kw += [
+                "Halloween",
+                "Lightning",
+                "Fireworks",
+                "Dissolve",
+                "Chase",
+                "Twinkle",
+                "Ripple",
+            ]
         if theme_l == "rainbow":
-            kw += ["Rainbow", "Color", "Palette", "Waves", "Noise", "BPM", "Juggle", "Pride", "Colorwaves"]
+            kw += [
+                "Rainbow",
+                "Color",
+                "Palette",
+                "Waves",
+                "Noise",
+                "BPM",
+                "Juggle",
+                "Pride",
+                "Colorwaves",
+            ]
         if theme_l == "synthwave":
-            kw += ["Color", "Waves", "Noise", "BPM", "Juggle", "Ripple", "Scanner", "Sweep", "Oscillate"]
+            kw += [
+                "Color",
+                "Waves",
+                "Noise",
+                "BPM",
+                "Juggle",
+                "Ripple",
+                "Scanner",
+                "Sweep",
+                "Oscillate",
+            ]
 
         # drop audio reactive if present in name? can't reliably; keep anyway; WLED will ignore on non-AR builds.
 
@@ -185,6 +227,8 @@ class LookLibraryGenerator:
         brightness: int = 180,
         include_multi_segment: bool = False,
         segment_ids: Optional[Sequence[int]] = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        cancel_cb: Callable[[], bool] | None = None,
     ) -> List[Look]:
         """
         Generate up to `total` looks, distributed across `themes`.
@@ -198,6 +242,16 @@ class LookLibraryGenerator:
 
         if not themes:
             themes = ["classic"]
+
+        progress_every = max(25, int(total // 200) or 1)
+
+        def _check_cancel() -> None:
+            if cancel_cb and cancel_cb():
+                raise JobCanceled("Job canceled")
+
+        def _report(message: str) -> None:
+            if progress_cb:
+                progress_cb(len(looks), int(total), message)
 
         # parameter banks (lots of variety)
         speeds = [40, 60, 80, 100, 120, 150, 180, 210, 235]
@@ -218,9 +272,15 @@ class LookLibraryGenerator:
         per_theme = max(1, total // max(1, len(themes)))
         extra = total - per_theme * len(themes)
 
+        _report("Starting…")
+
         for ti, theme in enumerate(themes):
+            _check_cancel()
             target = per_theme + (1 if ti < extra else 0)
-            colorsets = self.colors.get(theme, self.colors.get("classic", [])) or self.colors.get("classic", [])
+            _report(f"Theme: {theme}")
+            colorsets = self.colors.get(
+                theme, self.colors.get("classic", [])
+            ) or self.colors.get("classic", [])
             effs = self._pick_effects(theme)
             pals = self._pick_palettes(theme)
 
@@ -238,7 +298,11 @@ class LookLibraryGenerator:
                 return self.rng.choice(effs)
 
             attempts = 0
-            while len([l for l in looks if l.theme == theme]) < target and attempts < target * 50:
+            while (
+                len([l for l in looks if l.theme == theme]) < target
+                and attempts < target * 50
+            ):
+                _check_cancel()
                 attempts += 1
                 eff = pick_effect()
                 pal = self.rng.choice(pals) if pals else "Default"
@@ -257,7 +321,7 @@ class LookLibraryGenerator:
                     "transition": tr,
                     "seg": {
                         "id": 0,
-                        "fx": eff,   # NAME form (mapped later)
+                        "fx": eff,  # NAME form (mapped later)
                         "pal": pal,  # NAME form (mapped later)
                         "sx": sx,
                         "ix": ix,
@@ -273,8 +337,22 @@ class LookLibraryGenerator:
                 seen.add(key)
 
                 name = f"{theme}:{eff} [{pal}] sx{sx} ix{ix}"
-                look_id = _stable_id(theme, eff, pal, str(sx), str(ix), str(tr), str(sv.get("rev")), str(sv.get("grp")), str(sv.get("spc")))
-                looks.append(Look(id=look_id, name=name, theme=theme, tags=[], spec=spec))
+                look_id = _stable_id(
+                    theme,
+                    eff,
+                    pal,
+                    str(sx),
+                    str(ix),
+                    str(tr),
+                    str(sv.get("rev")),
+                    str(sv.get("grp")),
+                    str(sv.get("spc")),
+                )
+                looks.append(
+                    Look(id=look_id, name=name, theme=theme, tags=[], spec=spec)
+                )
+                if progress_cb and (len(looks) % progress_every == 0):
+                    _report(f"Generating looks… ({len(looks)}/{total})")
 
             # Optional: a small handful of multi-segment looks, for extra spice
             # If the WLED instance has multiple segments (e.g., 4), generate patterns that address ALL segments.
@@ -282,9 +360,16 @@ class LookLibraryGenerator:
                 ms_target = max(0, min(80, target // 6))
                 attempts = 0
                 while ms_target > 0 and attempts < 500:
+                    _check_cancel()
                     attempts += 1
                     # Build a few "segment styles" for variety.
-                    styles = ["alt_colors", "quad_colors", "alt_rev", "split_fx", "split_pal"]
+                    styles = [
+                        "alt_colors",
+                        "quad_colors",
+                        "alt_rev",
+                        "split_fx",
+                        "split_pal",
+                    ]
                     # Extra styles when you have 4+ segments (e.g. 4 quadrants).
                     if len(seg_ids) >= 4:
                         styles += [
@@ -298,7 +383,6 @@ class LookLibraryGenerator:
                             "street_spotlight_right",
                         ]
                     style = self.rng.choice(styles)  # segment-aware
-
 
                     pal = self.rng.choice(pals) if pals else "Default"
                     eff = self.rng.choice(effs)
@@ -333,10 +417,14 @@ class LookLibraryGenerator:
                             seg_map[sid] = (start, sid)
                         # Sort by start then id if starts exist
                         if seg_map:
-                            ordered_seg_ids = [sid for sid, _ in sorted(seg_map.items(), key=lambda kv: (kv[1][0], kv[1][1]))]
+                            ordered_seg_ids = [
+                                sid
+                                for sid, _ in sorted(
+                                    seg_map.items(), key=lambda kv: (kv[1][0], kv[1][1])
+                                )
+                            ]
                     except Exception:
                         ordered_seg_ids = list(seg_ids)
-
 
                     for si, seg_id in enumerate(ordered_seg_ids):
                         # per-segment effect/palette variations
@@ -350,7 +438,11 @@ class LookLibraryGenerator:
                         colors = csets[si % len(csets)]
                         sx = int(self.rng.choice(speeds))
                         ix = int(self.rng.choice(intensities))
-                        rev = bool((si % 2) == 1) if style in ("alt_rev",) else bool(self.rng.choice([False, False, True]))
+                        rev = (
+                            bool((si % 2) == 1)
+                            if style in ("alt_rev",)
+                            else bool(self.rng.choice([False, False, True]))
+                        )
 
                         seg_obj: Dict[str, Any] = {
                             "id": int(seg_id),
@@ -365,35 +457,73 @@ class LookLibraryGenerator:
                         # Segment-aware extras (WLED supports per-segment on/off, brightness, and offset).
                         # These are optional and won't change segment bounds.
                         if style == "quad_offset":
-                            seg_len = int(seg_len_by_id.get(int(seg_id), 0)) or max(1, int(self.rng.choice([196, 392, 784])))
-                            seg_obj["of"] = int((si / max(1, len(ordered_seg_ids))) * seg_len)
+                            seg_len = int(seg_len_by_id.get(int(seg_id), 0)) or max(
+                                1, int(self.rng.choice([196, 392, 784]))
+                            )
+                            seg_obj["of"] = int(
+                                (si / max(1, len(ordered_seg_ids))) * seg_len
+                            )
                         elif style == "quad_bri_gradient":
                             # Brightness "around" the tree
                             base = int(brightness)
                             # A simple 4-phase wave
-                            phase = (si % max(1, len(ordered_seg_ids))) / max(1.0, float(len(ordered_seg_ids)))
-                            seg_obj["bri"] = max(0, min(255, int(base * (0.35 + 0.65 * (0.5 + 0.5 * math.sin(2.0 * math.pi * phase))))))
+                            phase = (si % max(1, len(ordered_seg_ids))) / max(
+                                1.0, float(len(ordered_seg_ids))
+                            )
+                            seg_obj["bri"] = max(
+                                0,
+                                min(
+                                    255,
+                                    int(
+                                        base
+                                        * (
+                                            0.35
+                                            + 0.65
+                                            * (
+                                                0.5
+                                                + 0.5 * math.sin(2.0 * math.pi * phase)
+                                            )
+                                        )
+                                    ),
+                                ),
+                            )
                         elif style == "opposite_pairs":
                             # (0,2) share colors; (1,3) share colors
-                            pair = (si % 2)
-                            seg_obj["col"] = [[x[0], x[1], x[2]] for x in csets[pair][:3]]
+                            pair = si % 2
+                            seg_obj["col"] = [
+                                [x[0], x[1], x[2]] for x in csets[pair][:3]
+                            ]
                             seg_obj["rev"] = bool(pair == 1)
                         elif style == "spotlight":
                             # Pick a "spot" segment; dim others
-                            spot = int(self.rng.randrange(0, max(1, len(ordered_seg_ids))))
-                            seg_obj["bri"] = int(brightness) if si == spot else max(0, int(brightness * 0.15))
+                            spot = int(
+                                self.rng.randrange(0, max(1, len(ordered_seg_ids)))
+                            )
+                            seg_obj["bri"] = (
+                                int(brightness)
+                                if si == spot
+                                else max(0, int(brightness * 0.15))
+                            )
                             seg_obj["on"] = True
                         elif style == "street_spotlight_front":
                             # Bias spotlight to the street-facing quadrant.
                             # If ordered_seg_ids starts at street-right and goes counterclockwise,
                             # then the street-facing quadrant is the last one.
                             spot = max(0, len(ordered_seg_ids) - 1)
-                            seg_obj["bri"] = int(brightness) if si == spot else max(0, int(brightness * 0.15))
+                            seg_obj["bri"] = (
+                                int(brightness)
+                                if si == spot
+                                else max(0, int(brightness * 0.15))
+                            )
                             seg_obj["on"] = True
                         elif style == "street_spotlight_right":
                             # Bias spotlight to the street-right quadrant (first in ordered_seg_ids).
                             spot = 0
-                            seg_obj["bri"] = int(brightness) if si == spot else max(0, int(brightness * 0.15))
+                            seg_obj["bri"] = (
+                                int(brightness)
+                                if si == spot
+                                else max(0, int(brightness * 0.15))
+                            )
                             seg_obj["on"] = True
 
                         seg_list.append(seg_obj)
@@ -410,22 +540,40 @@ class LookLibraryGenerator:
                     }
 
                     key = f"ms|{style}|{theme}|{pal}|" + "|".join(
-                        [f"{s['id']}:{s['fx']}:{s['pal']}:{s['sx']}:{s['ix']}:{s.get('rev')}:{s['col']}" for s in seg_list]
+                        [
+                            f"{s['id']}:{s['fx']}:{s['pal']}:{s['sx']}:{s['ix']}:{s.get('rev')}:{s['col']}"
+                            for s in seg_list
+                        ]
                     )
                     if key in seen:
                         continue
                     seen.add(key)
                     name = f"{theme}:MS {eff} [{pal}]"
-                    look_id = _stable_id("ms", theme, style, eff, pal, str(len(seg_list)))
-                    looks.append(Look(id=look_id, name=name, theme=theme, tags=["multi_segment", style], spec=spec))
+                    look_id = _stable_id(
+                        "ms", theme, style, eff, pal, str(len(seg_list))
+                    )
+                    looks.append(
+                        Look(
+                            id=look_id,
+                            name=name,
+                            theme=theme,
+                            tags=["multi_segment", style],
+                            spec=spec,
+                        )
+                    )
                     ms_target -= 1
+                    if progress_cb and (len(looks) % progress_every == 0):
+                        _report(f"Generating looks… ({len(looks)}/{total})")
 
         # If still short (e.g., too few effects), top up from any theme
         attempts = 0
         while len(looks) < total and attempts < total * 50:
+            _check_cancel()
             attempts += 1
             theme = self.rng.choice(list(themes))
-            colorsets = self.colors.get(theme, self.colors.get("classic", [])) or self.colors.get("classic", [])
+            colorsets = self.colors.get(
+                theme, self.colors.get("classic", [])
+            ) or self.colors.get("classic", [])
             effs = self._pick_effects(theme)
             pals = self._pick_palettes(theme)
             eff = self.rng.choice(effs)
@@ -442,7 +590,15 @@ class LookLibraryGenerator:
                 "palette": pal,
                 "bri": brightness,
                 "transition": tr,
-                "seg": {"id": 0, "fx": eff, "pal": pal, "sx": sx, "ix": ix, "col": [[c[0], c[1], c[2]] for c in colors[:3]], **sv},
+                "seg": {
+                    "id": 0,
+                    "fx": eff,
+                    "pal": pal,
+                    "sx": sx,
+                    "ix": ix,
+                    "col": [[c[0], c[1], c[2]] for c in colors[:3]],
+                    **sv,
+                },
                 "tags": [],
             }
             key = f"{theme}|{eff}|{pal}|{sx}|{ix}|{tr}|{sv.get('rev')}|{sv.get('grp')}|{sv.get('spc')}|{spec['seg']['col']}"
@@ -450,9 +606,22 @@ class LookLibraryGenerator:
                 continue
             seen.add(key)
             name = f"{theme}:{eff} [{pal}] sx{sx} ix{ix}"
-            look_id = _stable_id(theme, eff, pal, str(sx), str(ix), str(tr), str(sv.get("rev")), str(sv.get("grp")), str(sv.get("spc")))
+            look_id = _stable_id(
+                theme,
+                eff,
+                pal,
+                str(sx),
+                str(ix),
+                str(tr),
+                str(sv.get("rev")),
+                str(sv.get("grp")),
+                str(sv.get("spc")),
+            )
             looks.append(Look(id=look_id, name=name, theme=theme, tags=[], spec=spec))
+            if progress_cb and (len(looks) % progress_every == 0):
+                _report(f"Generating looks… ({len(looks)}/{total})")
 
+        _report("Finalizing…")
         return looks
 
 

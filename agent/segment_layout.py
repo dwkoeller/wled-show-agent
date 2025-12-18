@@ -64,12 +64,18 @@ def _coerce_int(x: object, default: int) -> int:
 
 def _fallback_equal_layout(led_count: int, segment_ids: Sequence[int]) -> SegmentLayout:
     if not segment_ids:
-        return SegmentLayout(led_count=led_count, segments=[SegmentRange(id=0, start=0, stop=led_count)], kind="equal")
+        return SegmentLayout(
+            led_count=led_count,
+            segments=[SegmentRange(id=0, start=0, stop=led_count)],
+            kind="equal",
+        )
 
     n = len(segment_ids)
     if led_count <= 0:
         segs = [SegmentRange(id=int(sid), start=0, stop=0) for sid in segment_ids]
-        return SegmentLayout(led_count=led_count, segments=segs, kind=("quarters" if n == 4 else "equal"))
+        return SegmentLayout(
+            led_count=led_count, segments=segs, kind=("quarters" if n == 4 else "equal")
+        )
 
     base_len = led_count // n
     segs: List[SegmentRange] = []
@@ -81,7 +87,9 @@ def _fallback_equal_layout(led_count: int, segment_ids: Sequence[int]) -> Segmen
         segs.append(SegmentRange(id=int(sid), start=start, stop=stop))
         start = stop
 
-    return SegmentLayout(led_count=led_count, segments=segs, kind=("quarters" if n == 4 else "equal"))
+    return SegmentLayout(
+        led_count=led_count, segments=segs, kind=("quarters" if n == 4 else "equal")
+    )
 
 
 def fetch_segment_layout(

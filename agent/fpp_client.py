@@ -99,7 +99,13 @@ class FPPClient:
 
         return FPPResponse(status_code=int(resp.status_code), body=body)
 
-    def _try(self, attempts: Iterable[Tuple[str, str]], *, params: Optional[Dict[str, Any]] = None, json_body: Any = None) -> FPPResponse:
+    def _try(
+        self,
+        attempts: Iterable[Tuple[str, str]],
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Any = None,
+    ) -> FPPResponse:
         errors: List[str] = []
         last: Optional[Exception] = None
         for method, path in attempts:
@@ -172,3 +178,68 @@ class FPPClient:
             ]
         )
 
+    def system_info(self) -> FPPResponse:
+        return self._try(
+            [
+                ("GET", "/api/system/info"),
+                ("GET", "/api/system/status"),
+                ("GET", "/api/fppd/status"),
+            ]
+        )
+
+    def upload_file(
+        self,
+        *,
+        dir: str,
+        filename: str,
+        content: bytes,
+        subdir: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> FPPResponse:
+        """
+        Upload a file into the FPP media folder.
+
+        Newer FPP builds support `POST /api/file/:DirName(/:SubDir)/:Filename` with raw file contents.
+        """
+        d = str(dir or "").strip().strip("/")
+        if not d:
+            raise ValueError("dir is required")
+        fn = (filename or "").strip().strip("/")
+        if not fn:
+            raise ValueError("filename is required")
+        sd = (subdir or "").strip().strip("/") or None
+
+        path = f"/api/file/{quote(d)}"
+        if sd:
+            path += f"/{quote(sd)}"
+        path += f"/{quote(fn)}"
+
+        hdrs = {"Content-Type": "application/octet-stream"}
+        return self.request("POST", path, params=params, data=content, headers=hdrs)
+
+    def discover(self) -> Dict[str, Any]:
+        """
+        Best-effort discovery: return system info + which common endpoints appear reachable.
+
+        This is intentionally lightweight; if your FPP version differs, use /v1/fpp/request.
+        """
+        out: Dict[str, Any] = {"base_url": self.base_url}
+        try:
+            out["system"] = self.system_info().as_dict()
+        except Exception as e:
+            out["system"] = {"error": str(e)}
+
+        checks = {
+            "status": ("GET", "/api/fppd/status"),
+            "system_status": ("GET", "/api/system/status"),
+            "system_info": ("GET", "/api/system/info"),
+            "playlists": ("GET", "/api/playlists"),
+        }
+        reachable: Dict[str, Any] = {}
+        for name, (m, p) in checks.items():
+            try:
+                reachable[name] = {"ok": True, "resp": self.request(m, p).as_dict()}
+            except Exception as e:
+                reachable[name] = {"ok": False, "error": str(e)}
+        out["reachable"] = reachable
+        return out

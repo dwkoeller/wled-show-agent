@@ -43,7 +43,9 @@ class DDPStreamer:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
-        self._status = StreamStatus(running=False, pattern=None, fps=None, started_at=None, frames_sent=0)
+        self._status = StreamStatus(
+            running=False, pattern=None, fps=None, started_at=None, frames_sent=0
+        )
 
     def status(self) -> StreamStatus:
         with self._lock:
@@ -52,7 +54,7 @@ class DDPStreamer:
     def stop(self) -> StreamStatus:
         with self._lock:
             if not self._status.running:
-                return self.status()
+                return StreamStatus(**self._status.__dict__)
             self._stop.set()
             th = self._thread
         if th:
@@ -95,11 +97,15 @@ class DDPStreamer:
         # Build factory + pattern instance
         layout = None
         try:
-            layout = fetch_segment_layout(self.wled, segment_ids=self.segment_ids, refresh=True)
+            layout = fetch_segment_layout(
+                self.wled, segment_ids=self.segment_ids, refresh=True
+            )
         except Exception:
             layout = None
 
-        factory = PatternFactory(led_count=led_count, geometry=self.geometry, segment_layout=layout)
+        factory = PatternFactory(
+            led_count=led_count, geometry=self.geometry, segment_layout=layout
+        )
         pat = factory.create(pattern, params=params or {})
 
         # Best-effort enter live mode

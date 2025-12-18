@@ -32,6 +32,7 @@ class DDPSender:
       uint32: offset in bytes
       uint16: data length in bytes
     """
+
     def __init__(self, cfg: DDPConfig) -> None:
         if not cfg.host:
             raise ValueError("DDP host is required")
@@ -73,7 +74,7 @@ class DDPSender:
             start = i * max_len
             end = min(total, start + max_len)
             chunk = data[start:end]
-            last = (i == packets)
+            last = i == packets
             flags = self.cfg.ver1_flag | (self.cfg.push_flag if last else 0)
             header = struct.pack(
                 "!BBBBLH",
@@ -84,4 +85,6 @@ class DDPSender:
                 start,  # byte offset
                 len(chunk) & 0xFFFF,
             )
-            self._sock.sendto(header + bytes(chunk), (self.cfg.host, int(self.cfg.port)))
+            self._sock.sendto(
+                header + bytes(chunk), (self.cfg.host, int(self.cfg.port))
+            )

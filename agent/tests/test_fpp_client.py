@@ -14,4 +14,3 @@ def test_fpp_client_requires_playlist_name() -> None:
     c = FPPClient(base_url="http://172.16.200.20", timeout_s=1.0)
     with pytest.raises(ValueError):
         c.start_playlist("")
-

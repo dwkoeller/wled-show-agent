@@ -1,10 +1,17 @@
+# Python
 __pycache__/
 *.py[cod]
 
+# Virtualenv / env files
 .venv/
 .env
 
+# Pytest
+.pytest_cache/
+
+# UI build artifacts
 agent/ui/node_modules/
 agent/ui/dist/
 
+# macOS
 .DS_Store
