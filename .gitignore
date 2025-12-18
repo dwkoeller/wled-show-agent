@@ -1,17 +1,34 @@
-# Python
-__pycache__/
-*.py[cod]
-
-# Virtualenv / env files
-.venv/
-.env
-
-# Pytest
-.pytest_cache/
-
-# UI build artifacts
-agent/ui/node_modules/
-agent/ui/dist/
-
-# macOS
+node_modules
+dist
+tmp
+.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.sass-cache
+connect.lock
+coverage
+libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
 .DS_Store
+Thumbs.db
+package-lock.json
+pnpm-lock.yaml
+*.py[cod]
+*$py.class
+__pycache__/
+.venv
+.env
+*.db
+*.sqlite

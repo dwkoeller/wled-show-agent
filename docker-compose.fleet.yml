@@ -1,10 +1,32 @@
 services:
+  db:
+    image: mysql:8.4
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-wsa}
+      MYSQL_USER: ${MYSQL_USER:-wsa}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wsa}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wsa_root}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    expose:
+      - "3306"
+    restart: unless-stopped
+    profiles: ["db"]
+
   ui:
-    build: ./agent/ui
+    build: ./ui
     ports:
       - "8088:80"
     depends_on:
-      - tree
+      tree:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   tree:
@@ -15,6 +37,18 @@ services:
       - ./data/tree:/data
     expose:
       - "8088"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8088/v1/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     networks:
       default:
         aliases:
@@ -29,6 +63,18 @@ services:
       - .env.roofline1
     volumes:
       - ./data/roofline1:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8088/v1/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   roofline2:
@@ -39,6 +85,18 @@ services:
       - .env.roofline2
     volumes:
       - ./data/roofline2:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8088/v1/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   star_wled:
@@ -49,6 +107,18 @@ services:
       - .env.star_wled
     volumes:
       - ./data/star_wled:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8088/v1/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   star_esps:
@@ -61,4 +131,19 @@ services:
       ["uvicorn", "pixel_main:app", "--host", "0.0.0.0", "--port", "8088"]
     volumes:
       - ./data/star_esps:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8088/v1/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+
+volumes:
+  mysql_data:

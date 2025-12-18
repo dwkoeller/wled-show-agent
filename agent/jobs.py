@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Literal, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Protocol
 
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
@@ -22,6 +24,16 @@ class JobProgress:
     total: Optional[float] = None
     message: Optional[str] = None
 
+    @staticmethod
+    def from_dict(d: Any) -> "JobProgress":
+        if not isinstance(d, dict):
+            return JobProgress()
+        return JobProgress(
+            current=float(d["current"]) if d.get("current") is not None else None,
+            total=float(d["total"]) if d.get("total") is not None else None,
+            message=str(d["message"]) if d.get("message") is not None else None,
+        )
+
 
 @dataclass
 class Job:
@@ -36,6 +48,28 @@ class Job:
     error: Optional[str] = None
     logs: List[str] = field(default_factory=list)
     cancel_requested: bool = False
+
+    @staticmethod
+    def from_dict(d: Any) -> "Job":
+        if not isinstance(d, dict):
+            raise ValueError("Job must be an object")
+        return Job(
+            id=str(d.get("id") or ""),
+            kind=str(d.get("kind") or ""),
+            status=str(d.get("status") or "failed"),  # type: ignore[assignment]
+            created_at=float(d.get("created_at") or 0.0),
+            started_at=(
+                float(d["started_at"]) if d.get("started_at") is not None else None
+            ),
+            finished_at=(
+                float(d["finished_at"]) if d.get("finished_at") is not None else None
+            ),
+            progress=JobProgress.from_dict(d.get("progress")),
+            result=d.get("result"),
+            error=str(d["error"]) if d.get("error") is not None else None,
+            logs=[str(x) for x in (d.get("logs") or []) if x is not None],
+            cancel_requested=bool(d.get("cancel_requested")),
+        )
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -110,9 +144,24 @@ class JobContext:
             raise JobCanceled("Job canceled")
 
 
+class JobStore(Protocol):
+    def list_jobs(self, *, limit: int) -> List[Dict[str, Any]]: ...
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]: ...
+
+    def upsert_job(self, job: Dict[str, Any]) -> None: ...
+
+    def mark_in_flight_failed(self, *, reason: str = "Server restarted") -> int: ...
+
+
 class JobManager:
     def __init__(
-        self, *, max_jobs: int = 200, subscriber_queue_size: int = 200
+        self,
+        *,
+        max_jobs: int = 200,
+        subscriber_queue_size: int = 200,
+        persist_path: Optional[str] = None,
+        store: Optional[JobStore] = None,
     ) -> None:
         self._lock = threading.Lock()
         self._jobs: Dict[str, Job] = {}
@@ -122,14 +171,74 @@ class JobManager:
         self._subs: List[queue.Queue[str]] = []
         self._subscriber_queue_size = max(10, int(subscriber_queue_size))
 
+        self._store = store
+        self._persist_path = str(persist_path).strip() if persist_path else None
+        if self._store is not None:
+            try:
+                self._store.mark_in_flight_failed(reason="Server restarted")
+            except Exception:
+                pass
+            # Best-effort migrate any existing file-based history into the DB.
+            if self._persist_path:
+                try:
+                    for j in self._load_jobs_file(self._persist_path).values():
+                        try:
+                            self._store.upsert_job(j.as_dict())
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            self._load_from_store()
+        elif self._persist_path:
+            self._load_from_disk()
+
     def list_jobs(self, *, limit: int = 50) -> List[Job]:
+        lim = max(1, int(limit))
+        store = self._store
+        if store is not None:
+            try:
+                persisted = store.list_jobs(limit=lim)
+                jobs = [Job.from_dict(d) for d in persisted]
+            except Exception:
+                jobs = []
+            # Overlay any in-memory jobs (active / newest) to reflect freshest progress/logs.
+            with self._lock:
+                for j in self._jobs.values():
+                    if not j.id:
+                        continue
+                    if all(pj.id != j.id for pj in jobs):
+                        jobs.append(j)
+                    else:
+                        # Replace the persisted copy with the in-memory copy.
+                        jobs = [j if pj.id == j.id else pj for pj in jobs]
+            jobs = sorted(jobs, key=lambda j: j.created_at, reverse=True)
+            return jobs[:lim]
+
         with self._lock:
-            jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
-            return jobs[: max(1, int(limit))]
+            jobs_mem = sorted(
+                self._jobs.values(), key=lambda j: j.created_at, reverse=True
+            )
+            return jobs_mem[:lim]
 
     def get(self, job_id: str) -> Optional[Job]:
+        jid = str(job_id)
         with self._lock:
-            return self._jobs.get(str(job_id))
+            j = self._jobs.get(jid)
+        if j is not None:
+            return j
+        store = self._store
+        if store is None:
+            return None
+        try:
+            row = store.get_job(jid)
+        except Exception:
+            return None
+        if not row:
+            return None
+        try:
+            return Job.from_dict(row)
+        except Exception:
+            return None
 
     def is_cancel_requested(self, job_id: str) -> bool:
         with self._lock:
@@ -149,6 +258,7 @@ class JobManager:
                 j.finished_at = time.time()
             job_copy = j.as_dict()
         self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._persist_job(jid)
         return self.get(jid)
 
     def log(self, job_id: str, message: str) -> None:
@@ -195,6 +305,7 @@ class JobManager:
             self._trim_locked()
             job_copy = job.as_dict()
         self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._persist_job(jid)
 
         th = threading.Thread(
             target=self._run_job,
@@ -254,9 +365,11 @@ class JobManager:
                 job.started_at = time.time()
                 job_copy = job.as_dict()
         self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._persist_job(jid)
 
         # If canceled before start, do not run.
         if job_copy.get("status") == "canceled":
+            self._persist_job(jid)
             return
 
         try:
@@ -275,6 +388,7 @@ class JobManager:
             self._broadcast(
                 JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
             )
+            self._persist_job(jid)
         except JobCanceled as e:
             with self._lock:
                 job = self._jobs.get(jid)
@@ -286,6 +400,7 @@ class JobManager:
             self._broadcast(
                 JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
             )
+            self._persist_job(jid)
         except Exception as e:
             with self._lock:
                 job = self._jobs.get(jid)
@@ -297,6 +412,117 @@ class JobManager:
             self._broadcast(
                 JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
             )
+            self._persist_job(jid)
+
+    def _load_from_store(self) -> None:
+        store = self._store
+        if store is None:
+            return
+        try:
+            rows = store.list_jobs(limit=self._max_jobs)
+        except Exception:
+            return
+
+        now = time.time()
+        loaded: Dict[str, Job] = {}
+        for row in rows:
+            try:
+                j = Job.from_dict(row)
+            except Exception:
+                continue
+            if not j.id:
+                continue
+            # Jobs can't survive a restart; mark in-flight ones failed.
+            if j.status in ("queued", "running"):
+                j.status = "failed"
+                j.finished_at = j.finished_at or now
+                j.error = j.error or "Server restarted"
+            loaded[j.id] = j
+
+        with self._lock:
+            self._jobs = loaded
+            self._trim_locked()
+
+    def _load_jobs_file(self, path_s: str) -> Dict[str, Job]:
+        p = Path(path_s)
+        if not p.is_file():
+            return {}
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+        rows: List[Dict[str, Any]] = []
+        if isinstance(raw, dict) and isinstance(raw.get("jobs"), list):
+            rows = [x for x in raw["jobs"] if isinstance(x, dict)]
+        elif isinstance(raw, list):
+            rows = [x for x in raw if isinstance(x, dict)]
+        else:
+            return {}
+
+        now = time.time()
+        loaded: Dict[str, Job] = {}
+        for row in rows:
+            try:
+                j = Job.from_dict(row)
+            except Exception:
+                continue
+            if not j.id:
+                continue
+            # Jobs can't survive a restart; mark in-flight ones failed.
+            if j.status in ("queued", "running"):
+                j.status = "failed"
+                j.finished_at = j.finished_at or now
+                j.error = j.error or "Server restarted"
+            loaded[j.id] = j
+        return loaded
+
+    def _load_from_disk(self) -> None:
+        path_s = self._persist_path
+        if not path_s:
+            return
+        loaded = self._load_jobs_file(path_s)
+        with self._lock:
+            self._jobs = loaded
+            self._trim_locked()
+
+    def _persist_job(self, job_id: str) -> None:
+        store = self._store
+        if store is not None:
+            with self._lock:
+                j = self._jobs.get(str(job_id))
+                job_dict = j.as_dict() if j else None
+            if job_dict is None:
+                return
+            try:
+                store.upsert_job(job_dict)
+            except Exception:
+                # Best-effort: fall back to filesystem persistence.
+                pass
+        self._persist()
+
+    def _persist(self) -> None:
+        path_s = self._persist_path
+        if not path_s:
+            return
+
+        with self._lock:
+            jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+            jobs = jobs[: self._max_jobs]
+            payload = {"version": 1, "jobs": [j.as_dict() for j in jobs]}
+
+        p = Path(path_s)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, p)
+        except Exception:
+            # Best-effort: persistence should never break jobs.
+            return
 
 
 def sse_format_event(*, event: str, data: str) -> str:

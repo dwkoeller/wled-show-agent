@@ -202,6 +202,11 @@ If you want the agent to control Falcon Player (playlist start/stop, event trigg
 - `FPP_HTTP_TIMEOUT_S` – HTTP timeout for FPP requests
 - `FPP_HEADERS_JSON` – optional extra headers (JSON object) for auth (example: `{"Authorization":"Bearer <token>"}`)
 
+### Database (optional)
+
+- `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). When set, job history + small UI state (scheduler config and `runtime_state`) are also persisted in SQL.
+- With the included MySQL container: run `docker compose --profile db up -d --build` and set `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa` (the API will prefer async `aiomysql` and fall back to sync `pymysql` if needed).
+
 ### AI capability + cost (estimates)
 
 Important: **Only** `POST /v1/command` uses model tokens. Everything else (looks/sequences/DDP/pixel streaming) is local and free.
@@ -321,11 +326,35 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 - `GET /v1/jobs` – list recent jobs
 - `GET /v1/jobs/stream` – Server-Sent Events (SSE) stream of job updates
 - `POST /v1/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
+- Jobs are persisted under `DATA_DIR/jobs/jobs.json` and (optionally) to SQL when `DATABASE_URL` is set.
 
 ### File helpers (UI uses this)
 
 - `GET /v1/files/list` – list files under `DATA_DIR`
 - `GET /v1/files/download` – download a file under `DATA_DIR`
+- `PUT /v1/files/upload?path=...` – upload raw bytes to a file under `DATA_DIR` (UI: Tools → Files)
+- `DELETE /v1/files/delete?path=...` – delete a file under `DATA_DIR`
+
+### Pack ingestion (UI uses this)
+
+- `PUT /v1/packs/ingest?dest_dir=...&overwrite=true|false` – upload a `.zip` and unpack it under `DATA_DIR` (UI: Tools → Packs)
+- Limits: `PACK_MAX_FILES`, `PACK_MAX_UNPACKED_MB`
+
+### Scheduler (UI uses this)
+
+Basic show-window automation (UI: Tools → Scheduler):
+
+- `GET /v1/scheduler/status`
+- `GET /v1/scheduler/config`
+- `POST /v1/scheduler/config`
+- `POST /v1/scheduler/start`
+- `POST /v1/scheduler/stop`
+- `POST /v1/scheduler/run_once`
+
+### Metrics
+
+- `GET /v1/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
+- `GET /metrics` – Prometheus exposition format
 
 ---
 
@@ -729,6 +758,11 @@ curl -sS http://localhost:8088/v1/fleet/stop_all \
 - `./data/sequences/sequence_*.json` – generated cue lists
 - `./data/fseq/*.fseq` – exported `.fseq` files (renderable sequences only)
 - `./data/audio/beats.json` – audio BPM + beat timestamps
+- `./data/jobs/jobs.json` – job history (for the UI)
+- `./data/show/scheduler.json` – scheduler config (for the UI)
+- `./data/state/runtime_state.json` – last-known runtime state snapshot
+
+If you set `DATABASE_URL`, the agent also persists job history + these small state files into SQL (and will read from SQL when available).
 
 Safe to delete any time.
 
@@ -798,16 +832,18 @@ Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
 UI dev server (mobile-friendly React app):
 
 ```bash
-cd agent/ui
+cd ui
 npm install
 npm run dev
 # open http://localhost:5173/ui/ (Vite proxies /v1 to http://localhost:8088)
 ```
 
+If you run the UI dev server without proxying `/v1` (different origin), set API CORS config (see `.env.example`).
+
 UI E2E tests (Playwright):
 
 ```bash
-cd agent/ui
+cd ui
 npm install
 npx playwright install
 npm run test:e2e
