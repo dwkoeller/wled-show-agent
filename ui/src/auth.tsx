@@ -5,7 +5,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { api } from "./api";
+import { api, setCsrfConfig } from "./api";
 
 export type AuthConfig = {
   ok: boolean;
@@ -13,12 +13,18 @@ export type AuthConfig = {
   ui_enabled: boolean;
   auth_enabled: boolean;
   totp_enabled: boolean;
+  csrf_enabled?: boolean;
+  csrf_cookie_name?: string;
+  csrf_header_name?: string;
+  roles?: string[];
   openai_enabled: boolean;
   fpp_enabled: boolean;
+  ledfx_enabled?: boolean;
+  mqtt_enabled?: boolean;
   peers_configured: number;
 };
 
-export type AuthUser = { username: string };
+export type AuthUser = { username: string; role?: string; session_id?: string };
 
 type AuthState = {
   config: AuthConfig | null;
@@ -42,10 +48,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = async () => {
     try {
-      const me = await api<{ ok: boolean; user: AuthUser }>("/v1/auth/me", {
-        method: "GET",
-      });
-      setUser(me.user);
+      const me = await api<{ ok: boolean; user: AuthUser; session_id?: string }>(
+        "/v1/auth/me",
+        {
+          method: "GET",
+        },
+      );
+      const u = me.user || null;
+      if (u && me.session_id) {
+        u.session_id = me.session_id;
+      }
+      setUser(u);
     } catch {
       setUser(null);
     }
@@ -71,6 +84,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const cfg = await api<AuthConfig>("/v1/auth/config", { method: "GET" });
         if (mounted) setConfig(cfg);
+        setCsrfConfig({
+          enabled: Boolean(cfg.csrf_enabled),
+          cookieName: cfg.csrf_cookie_name || "wsa_csrf",
+          headerName: cfg.csrf_header_name || "X-CSRF-Token",
+        });
       } catch {
         if (mounted) setConfig(null);
       } finally {

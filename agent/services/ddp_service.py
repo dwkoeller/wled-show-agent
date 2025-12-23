@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from ddp_control import prepare_ddp_params
 from models.requests import DDPStartRequest
 from orientation import infer_orientation, OrientationInfo
+from services.audit_logger import log_event
 from services.auth_service import require_a2a_auth
 from services.state import AppState, get_state
 
@@ -27,11 +27,10 @@ async def _get_orientation(
     if not ordered:
         ordered = list(getattr(settings, "wled_segment_ids", []) or [])
     try:
-        from segment_layout import fetch_segment_layout
+        from segment_layout import fetch_segment_layout_async
 
-        layout = await asyncio.to_thread(
-            fetch_segment_layout,
-            state.wled_sync,
+        layout = await fetch_segment_layout_async(
+            state.wled,
             segment_ids=list(state.segment_ids or []),
             refresh=bool(refresh),
         )
@@ -54,6 +53,7 @@ async def _get_orientation(
 
 
 async def ddp_patterns(
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -64,11 +64,10 @@ async def ddp_patterns(
         info = await state.wled.device_info()
         layout = None
         try:
-            from segment_layout import fetch_segment_layout
+            from segment_layout import fetch_segment_layout_async
 
-            layout = await asyncio.to_thread(
-                fetch_segment_layout,
-                state.wled_sync,
+            layout = await fetch_segment_layout_async(
+                state.wled,
                 segment_ids=list(state.segment_ids or []),
                 refresh=False,
             )
@@ -80,27 +79,57 @@ async def ddp_patterns(
             geometry=ddp.geometry,
             segment_layout=layout,
         )
-        return {
+        res = {
             "ok": True,
             "patterns": factory.available(),
             "geometry_enabled": bool(ddp.geometry.enabled_for(int(info.led_count))),
         }
+        await log_event(
+            state,
+            action="ddp.patterns",
+            ok=True,
+            payload={"count": len(res["patterns"])},
+            request=request,
+        )
+        return res
     except HTTPException:
         raise
     except Exception as e:
+        await log_event(
+            state, action="ddp.patterns", ok=False, error=str(e), request=request
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
 async def ddp_status(
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     ddp = _require_ddp(state)
-    return {"ok": True, "status": ddp.status().__dict__}
+    try:
+        st = await ddp.status()
+        await log_event(state, action="ddp.status", ok=True, request=request)
+        return {"ok": True, "status": st.__dict__}
+    except HTTPException as e:
+        await log_event(
+            state,
+            action="ddp.status",
+            ok=False,
+            error=str(getattr(e, "detail", e)),
+            request=request,
+        )
+        raise
+    except Exception as e:
+        await log_event(
+            state, action="ddp.status", ok=False, error=str(e), request=request
+        )
+        raise
 
 
 async def ddp_start(
     req: DDPStartRequest,
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -121,8 +150,7 @@ async def ddp_start(
             default_start_pos=str(state.settings.quad_default_start_pos),
         )
 
-        st = await asyncio.to_thread(
-            ddp.start,
+        st = await ddp.start(
             pattern=req.pattern,
             params=params,
             duration_s=req.duration_s,
@@ -146,26 +174,82 @@ async def ddp_start(
                     file=None,
                     payload={"pattern": req.pattern, "params": dict(params or {})},
                 )
+                try:
+                    from services.events_service import emit_event
+
+                    await emit_event(
+                        state,
+                        event_type="meta",
+                        data={
+                            "event": "last_applied",
+                            "kind": "ddp",
+                            "name": str(req.pattern),
+                            "pattern": str(req.pattern),
+                        },
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
 
+        await log_event(
+            state,
+            action="ddp.start",
+            ok=True,
+            resource=str(req.pattern),
+            payload={"duration_s": req.duration_s},
+            request=request,
+        )
         return {"ok": True, "status": st.__dict__}
-    except HTTPException:
+    except HTTPException as e:
+        await log_event(
+            state,
+            action="ddp.start",
+            ok=False,
+            resource=str(req.pattern),
+            error=str(getattr(e, "detail", e)),
+            request=request,
+        )
         raise
     except Exception as e:
+        await log_event(
+            state,
+            action="ddp.start",
+            ok=False,
+            resource=str(req.pattern),
+            error=str(e),
+            request=request,
+        )
         raise HTTPException(status_code=400, detail=str(e))
 
 
 async def ddp_stop(
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     ddp = _require_ddp(state)
-    st = await asyncio.to_thread(ddp.stop)
     try:
-        from services.runtime_state_service import persist_runtime_state
+        st = await ddp.stop()
+        try:
+            from services.runtime_state_service import persist_runtime_state
 
-        await persist_runtime_state(state, "ddp_stop")
-    except Exception:
-        pass
-    return {"ok": True, "status": st.__dict__}
+            await persist_runtime_state(state, "ddp_stop")
+        except Exception:
+            pass
+        await log_event(state, action="ddp.stop", ok=True, request=request)
+        return {"ok": True, "status": st.__dict__}
+    except HTTPException as e:
+        await log_event(
+            state,
+            action="ddp.stop",
+            ok=False,
+            error=str(getattr(e, "detail", e)),
+            request=request,
+        )
+        raise
+    except Exception as e:
+        await log_event(
+            state, action="ddp.stop", ok=False, error=str(e), request=request
+        )
+        raise

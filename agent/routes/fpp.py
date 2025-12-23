@@ -11,6 +11,12 @@ router.add_api_route("/v1/fpp/status", fpp_service.fpp_status, methods=["GET"])
 router.add_api_route("/v1/fpp/discover", fpp_service.fpp_discover, methods=["GET"])
 router.add_api_route("/v1/fpp/playlists", fpp_service.fpp_playlists, methods=["GET"])
 router.add_api_route(
+    "/v1/fpp/playlists/sync", fpp_service.fpp_playlists_sync, methods=["POST"]
+)
+router.add_api_route(
+    "/v1/fpp/playlists/import", fpp_service.fpp_playlists_import, methods=["POST"]
+)
+router.add_api_route(
     "/v1/fpp/playlist/start", fpp_service.fpp_start_playlist, methods=["POST"]
 )
 router.add_api_route(
@@ -31,5 +37,10 @@ router.add_api_route(
 router.add_api_route(
     "/v1/fpp/export/fleet_stop_all_script",
     fpp_service.export_fleet_stop_all_script,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/v1/fpp/export/event_script",
+    fpp_service.export_event_script,
     methods=["POST"],
 )

@@ -11,6 +11,7 @@ Runs as a single FastAPI service in Docker (works great on a Proxmox VM/LXC) and
 - **Export renderable sequences to `.fseq`** (procedural `ddp` steps only)
 - **Analyze audio for BPM + beats** (writes `beats.json`)
 - **(Optional) Natural language control** via OpenAI tool-calling or local commands (`/v1/command`)
+- **(Optional) LedFx control** for scenes/effects/virtuals (`LEDFX_BASE_URL`)
 
 This repo is designed for **LAN use only**.
 
@@ -125,6 +126,23 @@ The full set of environment variables is documented in `.env.example`.
 - `WLED_COMMAND_COOLDOWN_MS` – minimum delay between write calls to WLED.
 - `WLED_HTTP_TIMEOUT_S` – HTTP timeout for WLED requests.
 
+### Outbound retries / backoff
+
+Shared retry policy for WLED/FPP/LedFx/peer HTTP calls (applies to `/v1/fleet/*`, `/v1/fpp/*`, `/v1/ledfx/*`, `/v1/wled/*`):
+
+- `OUTBOUND_RETRY_ATTEMPTS` – total attempts (default `2`)
+- `OUTBOUND_RETRY_BACKOFF_BASE_S` – base backoff (default `0.15`)
+- `OUTBOUND_RETRY_BACKOFF_MAX_S` – max backoff (default `1.0`)
+- `OUTBOUND_RETRY_STATUS_CODES` – comma-separated HTTP codes to retry
+
+### Background processing (CPU pool)
+
+Offloads heavy JSON parsing/rendering and large file scans to a process pool:
+
+- `CPU_POOL_MAX_WORKERS` – process workers for CPU-bound jobs (default `2`)
+- `CPU_POOL_MAX_QUEUE` – max queued jobs before backpressure (default `8`)
+- `CPU_POOL_QUEUE_TIMEOUT_S` – enqueue timeout (default `2.0`)
+
 ### Segments
 
 If your WLED tree uses multiple segments (common for multi-output builds):
@@ -161,6 +179,9 @@ QUAD_DEFAULT_START_POS=front
 - `DDP_PORT` – default `4048`
 - `DDP_MAX_PIXELS_PER_PACKET` – keep modest for Wi‑Fi (default `480`)
 - `DDP_FPS_DEFAULT` / `DDP_FPS_MAX`
+- `DDP_DROP_LATE_FRAMES` – drop late frames to keep realtime smooth (default `true`)
+- `DDP_BACKPRESSURE_MAX_LAG_S` – max lag before dropping frames (seconds, default `0.25`)
+- `DDP_USE_CPU_POOL` – use the process pool for frame rendering (default `false`)
 
 ### OpenAI (optional)
 
@@ -168,6 +189,7 @@ Enables `/v1/command`:
 
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
+- `OPENAI_STT_MODEL` (default `gpt-4o-mini-transcribe`) for `/v1/voice/transcribe` + `/v1/voice/command`
   - Recommended: `gpt-5-mini` (best reliability/$ for tool-calling)
   - Cheapest: `gpt-5-nano` (works, but can be less reliable with tool args)
   - Best quality: `gpt-5` / `gpt-5.2` (usually unnecessary for this toolset)
@@ -179,20 +201,41 @@ When enabled, the director can call tools like:
 - `apply_random_look`, `start_ddp_pattern`, `stop_all`
 - `fleet_start_sequence`, `fleet_stop_sequence`
 - `fpp_start_playlist`, `fpp_stop_playlist`, `fpp_trigger_event` (when `FPP_BASE_URL` is set)
+- `ledfx_activate_scene`, `ledfx_deactivate_scene`, `ledfx_set_virtual_effect`, `ledfx_set_virtual_brightness` (when `LEDFX_BASE_URL` is set)
 
-### Web UI + local auth (optional)
+### Web UI + local auth (required)
 
 - The UI is a **React + MUI + TypeScript** single-page app served at `GET /ui` (mobile friendly, includes text + voice command input).
-- To enable local login (service-issued JWT cookie):
+- Local login (service-issued JWT cookie) is mandatory for internet-facing use:
   - `AUTH_ENABLED=true`
   - `AUTH_USERNAME` / `AUTH_PASSWORD`
   - `AUTH_JWT_SECRET` (HMAC secret for HS256)
-  - Optional 2FA: `AUTH_TOTP_ENABLED=true` + `AUTH_TOTP_SECRET` (base32)
+  - `AUTH_TOTP_ENABLED=true` + `AUTH_TOTP_SECRET` (base32)
+  - Optional multi-user seed: `AUTH_USER_ROLE` (default admin) + `AUTH_USERS_JSON`
+  - Login rate limiting: `AUTH_LOGIN_MAX_ATTEMPTS`, `AUTH_LOGIN_WINDOW_S`, `AUTH_LOGIN_LOCKOUT_S`
+  - Session cleanup: `AUTH_SESSION_CLEANUP_INTERVAL_S`, `AUTH_SESSION_CLEANUP_MAX_AGE_S`, `AUTH_SESSION_TOUCH_INTERVAL_S`
+  - CSRF for cookie auth: `AUTH_CSRF_ENABLED`, `AUTH_CSRF_COOKIE_NAME`, `AUTH_CSRF_HEADER_NAME`
 
 Notes:
 
-- When `AUTH_ENABLED=true`, all endpoints require either a valid JWT (cookie or `Authorization: Bearer <jwt>`) or the configured `X-A2A-Key` (if you also use A2A/fleet).
+- When `AUTH_ENABLED=true`, all endpoints require either a valid JWT (cookie or `Authorization: Bearer <jwt>`), a per-user API key (`X-API-Key: wsa_...`), or the configured `X-A2A-Key` (if you also use A2A/fleet).
 - `GET /v1/health`, `GET /v1/auth/config`, `POST /v1/auth/login`, `POST /v1/auth/logout`, and `GET /ui/*` remain accessible without a token so you can sign in.
+- Users and sessions are stored in SQL so admins can revoke sessions and manage users (`/v1/auth/users`, `/v1/auth/sessions`).
+
+### API rate limiting
+
+Default per-IP token bucket (adjustable in `.env`):
+
+- `RATE_LIMIT_ENABLED` – enable/disable limiter (default `true`)
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` – steady rate (default `600`)
+- `RATE_LIMIT_BURST` – burst capacity (default `120`)
+- `RATE_LIMIT_SCOPE` – `ip` or `ip_path` (default `ip`)
+- `RATE_LIMIT_EXEMPT_PATHS` – comma-separated path prefixes to skip
+- `RATE_LIMIT_BUCKET_TTL_S` / `RATE_LIMIT_CLEANUP_INTERVAL_S`
+- `RATE_LIMIT_TRUST_PROXY_HEADERS` – trust `X-Forwarded-For` for client IPs
+- Roles: `admin`, `user`, `viewer` (viewer is read-only for non-GET requests).
+- Optional per-user IP allowlists can restrict logins and API key usage.
+- Cookie-auth clients must include the CSRF header (`AUTH_CSRF_HEADER_NAME`) with the value from the CSRF cookie (`AUTH_CSRF_COOKIE_NAME`).
 - Generate a JWT secret:
 
 ```bash
@@ -205,10 +248,17 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 python3 -c 'import sys; sys.path.insert(0,"agent"); from auth import hash_password_pbkdf2; print(hash_password_pbkdf2("changeme"))'
 ```
 
-- Optional: generate a TOTP secret for `AUTH_TOTP_SECRET`:
+- Generate a TOTP secret for `AUTH_TOTP_SECRET`:
 
 ```bash
 python3 -c 'import sys; sys.path.insert(0,"agent"); from auth import totp_generate_secret; print(totp_generate_secret())'
+```
+
+- Optional: seed additional users via `AUTH_USERS_JSON`:
+  - Supports `ip_allowlist` (array of IPs/CIDRs) and `role` (`admin`/`user`/`viewer`).
+
+```bash
+AUTH_USERS_JSON='[{"username":"operator","password":"changeme","totp_secret":"BASE32","role":"viewer","ip_allowlist":["10.0.0.0/8"]}]'
 ```
 
 ### Falcon Player (FPP) (optional)
@@ -219,12 +269,61 @@ If you want the agent to control Falcon Player (playlist start/stop, event trigg
 - `FPP_HTTP_TIMEOUT_S` – HTTP timeout for FPP requests
 - `FPP_HEADERS_JSON` – optional extra headers (JSON object) for auth (example: `{"Authorization":"Bearer <token>"}`)
 
+### LedFx (optional)
+
+If you want the agent to control LedFx (scenes/effects/virtuals):
+
+- `LEDFX_BASE_URL` – base URL of your LedFx instance (example: `http://localhost:8888`)
+- `LEDFX_HTTP_TIMEOUT_S` – HTTP timeout for LedFx requests
+- `LEDFX_FLEET_CACHE_TTL_S` – cache TTL (seconds) for the fleet summary endpoint
+- `LEDFX_HEADERS_JSON` – optional extra headers (JSON object) for auth (example: `{"Authorization":"Bearer <token>"}`)
+
+### MQTT automation bridge (optional)
+
+Enable MQTT control for sequences, brightness presets, and scheduler toggles:
+
+- `MQTT_URL` – broker URL (e.g. `mqtt://user:pass@192.168.1.10:1883`)
+- `MQTT_ENABLED` – optional; defaults to true when `MQTT_URL` is set
+- `MQTT_BASE_TOPIC` – defaults to `wsa/<AGENT_ID>`
+- `MQTT_QOS` – QoS level (0–2)
+- `MQTT_STATUS_INTERVAL_S` – publish status payloads periodically (0 disables)
+- `MQTT_RECONNECT_INTERVAL_S` – reconnect delay (seconds)
+ - `HA_MQTT_DISCOVERY_ENABLED` – publish Home Assistant MQTT discovery configs
+ - `HA_MQTT_DISCOVERY_PREFIX` – discovery topic prefix (default `homeassistant`)
+ - `HA_MQTT_ENTITY_PREFIX` – optional friendly name prefix for HA entities
+
 ### Database (required)
 
 - `DATABASE_URL` – SQLAlchemy URL (MySQL recommended). This service will not start without it.
 - For Docker Compose, the included `db` service is enabled by default; `.env.example` uses `DATABASE_URL=mysql://wsa:wsa@db:3306/wsa`.
-- Retention (SQL): job history (`JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`) and scheduler events (`SCHEDULER_EVENTS_MAX_ROWS`, `SCHEDULER_EVENTS_MAX_DAYS`, `SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S`).
+- Retention (SQL): job history (`JOB_HISTORY_MAX_ROWS`, `JOB_HISTORY_MAX_DAYS`, `JOB_HISTORY_MAINTENANCE_INTERVAL_S`), scheduler events (`SCHEDULER_EVENTS_MAX_ROWS`, `SCHEDULER_EVENTS_MAX_DAYS`, `SCHEDULER_EVENTS_MAINTENANCE_INTERVAL_S`), audit logs (`AUDIT_LOG_MAX_ROWS`, `AUDIT_LOG_MAX_DAYS`, `AUDIT_LOG_MAINTENANCE_INTERVAL_S`), event history (`EVENTS_HISTORY_MAX_ROWS`, `EVENTS_HISTORY_MAX_DAYS`, `EVENTS_HISTORY_MAINTENANCE_INTERVAL_S`), orchestration runs (`ORCHESTRATION_RUNS_MAX_ROWS`, `ORCHESTRATION_RUNS_MAX_DAYS`, `ORCHESTRATION_RUNS_MAINTENANCE_INTERVAL_S`), fleet history (`AGENT_HISTORY_MAX_ROWS`, `AGENT_HISTORY_MAX_DAYS`, `AGENT_HISTORY_MAINTENANCE_INTERVAL_S`), and UI metadata tables (`PACK_INGESTS_MAX_ROWS`, `PACK_INGESTS_MAX_DAYS`, `SEQUENCE_META_MAX_ROWS`, `SEQUENCE_META_MAX_DAYS`, `AUDIO_ANALYSES_MAX_ROWS`, `AUDIO_ANALYSES_MAX_DAYS`, `SHOW_CONFIGS_MAX_ROWS`, `SHOW_CONFIGS_MAX_DAYS`, `FSEQ_EXPORTS_MAX_ROWS`, `FSEQ_EXPORTS_MAX_DAYS`, `FPP_SCRIPTS_MAX_ROWS`, `FPP_SCRIPTS_MAX_DAYS`).
+- Event history spool (disk-backed) for DB outages: `EVENTS_SPOOL_PATH`, `EVENTS_SPOOL_MAX_MB`, `EVENTS_SPOOL_FLUSH_INTERVAL_S`.
 - Optional startup reconcile: `DB_RECONCILE_ON_STARTUP=true` to scan `DATA_DIR` and backfill metadata tables.
+- Optional periodic reconcile: `DB_RECONCILE_INTERVAL_S` (seconds, 0 disables), `DB_RECONCILE_SCAN_LIMIT`, `DB_RECONCILE_AUDIO`.
+
+### Migrations (Alembic)
+
+Alembic is scaffolded under `agent/alembic`. It reads `DATABASE_URL` and uses sync drivers for migrations.
+On startup, the agent runs `alembic upgrade head` to apply pending migrations (disable via `DB_MIGRATE_ON_STARTUP=false`).
+
+- Create a revision: `cd agent && alembic revision --autogenerate -m "describe change"`
+- Apply migrations: `cd agent && alembic upgrade head`
+
+### Blocking worker pool
+
+CPU-bound tasks (xLights import, audio analysis, FSEQ export) run in a bounded worker pool:
+
+- `BLOCKING_MAX_WORKERS` – thread count (default `4`)
+- `BLOCKING_MAX_QUEUE` – max in-flight tasks (default `16`)
+- `BLOCKING_QUEUE_TIMEOUT_S` – time to wait for a slot (default `2.0`)
+
+DDP frame rendering uses a separate pool to avoid starving other work:
+
+- `DDP_BLOCKING_MAX_WORKERS` – thread count (default `1`)
+- `DDP_BLOCKING_MAX_QUEUE` – max in-flight tasks (default `2`)
+- `DDP_BLOCKING_QUEUE_TIMEOUT_S` – time to wait for a slot (default `0.05`)
+
+Set `DDP_USE_CPU_POOL=true` to render frames in the CPU process pool instead.
 
 ### AI capability + cost (estimates)
 
@@ -269,7 +368,7 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 
 - `GET /v1/health`
 - `GET /livez` – liveness probe (always 200 if process is up)
-- `GET /readyz` – readiness checks (WLED + DB)
+- `GET /readyz` – readiness checks (WLED + DB + LedFx when configured)
 - `GET /v1/wled/info`
 - `GET /v1/wled/state`
 - `GET /v1/wled/segments`
@@ -294,13 +393,43 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 - `POST /v1/sequences/stop`
 - `GET /v1/sequences/status`
 
+### Metadata (SQL)
+
+- `POST /v1/meta/reconcile` – scan DATA_DIR and upsert metadata tables
+- `GET /v1/meta/reconcile/status` – last reconcile run + status
+- `GET /v1/meta/reconcile/history` – reconcile run history (supports `limit`, `offset`, `status`, `source`)
+- `POST /v1/meta/reconcile/cancel` – request cancel for the active run
+
+### Orchestration (scenes + playlists)
+
+- `POST /v1/orchestration/start` – run a mixed playlist of looks, sequences, DDP, blackout steps
+- `POST /v1/orchestration/stop`
+- `GET /v1/orchestration/status`
+- `POST /v1/orchestration/crossfade` – apply a look or raw state with a transition
+- `POST /v1/orchestration/blackout` – fade to off (also stops running sequence/DDP)
+- `GET /v1/orchestration/presets` – list saved orchestration presets (supports `scope`, `limit`, `offset`)
+- `POST /v1/orchestration/presets` – create or update a preset payload
+- `GET /v1/orchestration/presets/export` – export presets (JSON)
+- `POST /v1/orchestration/presets/import` – import presets (JSON)
+- `DELETE /v1/orchestration/presets/{preset_id}` – delete a preset
+
 ### Fleet sequences (multi-controller)
 
 Run a single generated sequence across your whole A2A fleet:
 
 - `POST /v1/fleet/sequences/start`
+- `POST /v1/fleet/sequences/start_staggered`
 - `POST /v1/fleet/sequences/stop`
 - `GET /v1/fleet/sequences/status`
+
+### Fleet orchestration (scenes across devices)
+
+- `POST /v1/fleet/orchestration/start`
+- `POST /v1/fleet/orchestration/stop`
+- `GET /v1/fleet/orchestration/status`
+
+Fleet orchestration sequence steps support optional `stagger_s` and `start_delay_s`
+to stagger per-peer starts.
 
 ### DDP patterns (realtime)
 
@@ -313,6 +442,28 @@ Run a single generated sequence across your whole A2A fleet:
 
 - `POST /v1/command`
 
+### Voice (UI fallback)
+
+- `POST /v1/voice/transcribe` – OpenAI STT used by the UI when browser speech APIs are unavailable
+- `POST /v1/voice/command` – transcribe audio and run `/v1/command` in one call
+
+### Auth (admin)
+
+- `GET /v1/auth/users` – list users
+- `POST /v1/auth/users` – create user (role, ip_allowlist, TOTP)
+- `PUT /v1/auth/users/{username}` – update user (password/role/disable/rotate TOTP/ip_allowlist)
+- `DELETE /v1/auth/users/{username}` – delete user
+- `GET /v1/auth/sessions` – list sessions (supports `username`, `active_only`, `limit`, `offset`)
+- `POST /v1/auth/sessions/revoke` – revoke by `jti` or `username`
+- `GET /v1/auth/login_attempts` – list login attempts / lockouts
+- `POST /v1/auth/login_attempts/clear` – clear lockouts by `username`, `ip`, or `all`
+- `GET /v1/auth/api_keys` – list API keys
+- `POST /v1/auth/api_keys` – create API key
+- `POST /v1/auth/api_keys/revoke` – revoke API key by `id` or `username`
+- `POST /v1/auth/password/change` – change your password (requires current password + TOTP)
+- `POST /v1/auth/password/reset_request` – create a one-time reset token (admin)
+- `POST /v1/auth/password/reset` – use reset token to set a new password (public)
+
 ### A2A (agent-to-agent) + fleet (multi-controller)
 
 Use this when you run **multiple WLED controllers** (mega tree + rooflines) and want a single agent to coordinate them.
@@ -321,20 +472,53 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 - `POST /v1/a2a/invoke` – invoke an action on this agent
 - `GET /v1/fleet/peers` – list configured peer agents
 - `GET /v1/fleet/status` – fleet status from SQL heartbeats (no fanout)
+- `GET /v1/fleet/history` – fleet heartbeat history snapshots (SQL, supports `agent_id`, `role`, `tag`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /v1/fleet/history/export` – export fleet heartbeat history (CSV/JSON via `format`)
+- `POST /v1/fleet/resolve` – resolve target selectors into concrete peers (no fanout)
 - `POST /v1/fleet/apply_random_look` – pick a look on this agent and apply the same look spec to peers
+- `POST /v1/fleet/crossfade` – apply a look or WLED state across the fleet with a transition
 - `POST /v1/fleet/invoke` – invoke any A2A action on peers (and optionally self)
 - `POST /v1/fleet/stop_all` – stop sequences + DDP across the fleet
+- `GET /v1/orchestration/runs` – orchestration run history (local + fleet; supports `since`, `until`, `agent_id`, `scope`, `status`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /v1/orchestration/runs/{run_id}` – orchestration run details (steps + peer results; supports `steps_limit`, `steps_offset`, `step_status`, `step_ok`, `peers_limit`, `peers_offset`, `peer_status`, `peer_ok`)
+- `GET /v1/orchestration/runs/export` – export orchestration runs (CSV/JSON via `format`)
+- `GET /v1/orchestration/runs/{run_id}/steps/export` – export orchestration steps (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
+- `GET /v1/orchestration/runs/{run_id}/peers/export` – export orchestration peer results (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
+- `GET /v1/audit/logs` – audit log for auth/admin actions (supports `since`, `until`, `offset`, `agent_id`, `action`, `actor`, `resource`, `ip`, `error`, `ok`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /v1/audit/logs/export` – export audit logs (CSV/JSON via `format`)
+
+Targeting notes:
+
+- `targets` (when present) can include configured peer names, agent IDs, `role:<role>`, `tag:<tag>`, or `*` / `all` (all online heartbeat-discovered agents).
+- DB-discovered targeting requires agents to advertise `AGENT_BASE_URL` (defaults to `http://<AGENT_ID>:8088` in Docker).
 
 ### Falcon Player (FPP) integration (optional)
 
 - `GET /v1/fpp/status`
 - `GET /v1/fpp/playlists`
+- `POST /v1/fpp/playlists/sync` – create/update a playlist JSON from sequence filenames
+- `POST /v1/fpp/playlists/import` – fetch a playlist from FPP (and optionally save locally)
 - `POST /v1/fpp/playlist/start`
 - `POST /v1/fpp/playlist/stop`
 - `POST /v1/fpp/event/trigger`
 - `POST /v1/fpp/request` – proxy a raw request to FPP (escape hatch)
+- `POST /v1/fpp/upload_file` – upload a local file under `DATA_DIR` into FPP media dirs
 - `POST /v1/fpp/export/fleet_sequence_start_script` – generate an FPP script that triggers a fleet sequence
 - `POST /v1/fpp/export/fleet_stop_all_script` – generate an FPP script that stops the fleet
+- `POST /v1/fpp/export/event_script` – generate an FPP event script (event-<id>.sh)
+
+### LedFx integration (optional)
+
+- `GET /v1/ledfx/status`
+- `GET /v1/ledfx/fleet` – fleet summary (health + last scene/effect via A2A)
+- `GET /v1/ledfx/virtuals`
+- `GET /v1/ledfx/scenes`
+- `GET /v1/ledfx/effects`
+- `POST /v1/ledfx/scene/activate`
+- `POST /v1/ledfx/scene/deactivate`
+- `POST /v1/ledfx/virtual/effect`
+- `POST /v1/ledfx/virtual/brightness`
+- `POST /v1/ledfx/request` – proxy a raw request to LedFx (escape hatch; `/api/*` only)
 
 ### xLights helpers (optional)
 
@@ -346,9 +530,13 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 ### Jobs + progress (UI uses this)
 
 - `GET /v1/jobs` – list recent jobs
-- `GET /v1/jobs/stream` – Server-Sent Events (SSE) stream of job updates
+- `GET /v1/events` – Server-Sent Events (SSE) stream (job updates emit `type="jobs"`, filters: `types`, `event`)
+- `GET /v1/events/history` – list persisted SSE history (`offset` paging or cursor `after_id`)
+- `GET /v1/events/history/export` – export SSE history (CSV/JSON/NDJSON via `format`)
+- `GET /v1/events/stats` – SSE bus + spool diagnostics
 - `POST /v1/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
-- Jobs are persisted to SQL. A rolling JSON snapshot is also written under `DATA_DIR/jobs/jobs.json`.
+- Jobs are persisted to SQL.
+- Job queue tuning: `JOB_MAX_JOBS`, `JOB_QUEUE_SIZE`, `JOB_WORKER_COUNT`.
 
 ### File helpers (UI uses this)
 
@@ -357,7 +545,9 @@ Use this when you run **multiple WLED controllers** (mega tree + rooflines) and 
 - `POST /v1/files/upload` – multipart upload with strict allowlist (UI: Tools → Files)
   - Allowed dirs/types: `audio/` and `music/` (`.wav/.mp3/.ogg/.flac/.m4a/.aac`), `xlights/` (`.xsq`), `sequences/` (`.json`)
 - `PUT /v1/files/upload?path=...` – upload raw bytes to an arbitrary file under `DATA_DIR` (advanced / no multipart dependencies)
+  - Set `FILES_UPLOAD_ALLOWLIST_ONLY=true` to restrict raw uploads to the same allowlist as multipart.
 - `DELETE /v1/files/delete?path=...` – delete a file under `DATA_DIR`
+- `DELETE /v1/files/delete_dir?dir=...&recursive=true|false` – delete a directory under `DATA_DIR`
 
 ### Pack ingestion (UI uses this)
 
@@ -374,11 +564,12 @@ Basic show-window automation (UI: Tools → Scheduler):
 - `POST /v1/scheduler/start`
 - `POST /v1/scheduler/stop`
 - `POST /v1/scheduler/run_once`
-- `GET /v1/scheduler/events` – recent scheduler action history (SQL)
+- `GET /v1/scheduler/events` – recent scheduler action history (SQL, supports `agent_id`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /v1/scheduler/events/export` – export scheduler events (CSV/JSON via `format`)
 
 Notes:
 
-- Scheduler config is stored in SQL (global KV) and mirrored to `DATA_DIR/show/scheduler.json`.
+- Scheduler config is stored in SQL (global KV).
 - Fleet-wide scheduler leader election uses a DB lease; only agents whose `AGENT_ROLE` is in `SCHEDULER_LEADER_ROLES` can become leader (default: `tree,device`).
 
 ### Metadata (SQL)
@@ -388,14 +579,36 @@ UI-facing metadata backed by SQL:
 - `GET /v1/meta/packs`
 - `GET /v1/meta/sequences`
 - `GET /v1/meta/audio_analyses`
+- `GET /v1/meta/show_configs`
+- `GET /v1/meta/fseq_exports`
+- `GET /v1/meta/fpp_scripts`
 - `GET /v1/meta/last_applied`
 - `POST /v1/meta/reconcile` – scan `DATA_DIR` and upsert metadata rows
+
+### Backup / Restore
+
+- `GET /v1/backup/export` – export DB rows + optional `DATA_DIR` into a zip archive
+  - Query params: `include_db`, `include_data`, `include_auth`, `exclude_globs` (repeatable)
+- `POST /v1/backup/import` – restore DB rows and/or files from a zip archive (admin-only)
+  - Query params: `restore_db`, `restore_data`, `restore_auth`, `db_mode` (`merge`/`replace`), `overwrite_data`, `exclude_globs`, `require_manifest`, `require_schema_match`
+  - Restores are now transactional for DB data and stage files before applying.
+- Limits: `BACKUP_MAX_ZIP_MB`, `BACKUP_MAX_UNPACKED_MB`, `BACKUP_MAX_FILE_MB`, `BACKUP_MAX_FILES`, `BACKUP_EXCLUDE_GLOBS`, `BACKUP_SPOOL_MAX_MB`
 
 ### Metrics
 
 - `GET /v1/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
 - `GET /metrics` – Prometheus exposition format
   - When `AUTH_ENABLED=true`: set `METRICS_PUBLIC=true` or configure `METRICS_SCRAPE_TOKEN` + `METRICS_SCRAPE_HEADER`.
+  - Outbound HTTP metrics include `target_kind` labels like `wled`, `fpp`, `ledfx`, and `peer`.
+
+### Server events (SSE)
+
+- `GET /v1/events` – server-sent events stream for UI refresh (auth required)
+  - Supports `Last-Event-ID` or `?last_event_id=` replay from the persisted event log.
+  - Optional filters: `types=jobs,fleet` and `event=created,updated` (comma-separated).
+- `GET /v1/events/history` supports cursor paging via `after_id` (CSV lists for `event_type`/`event` apply in cursor mode).
+- `GET /v1/events/history/export` supports `format=csv|json|ndjson` plus `after_id` for streaming exports.
+- `GET /v1/events/stats` returns SSE subscriber + spool diagnostics for UI health checks.
 
 ---
 
@@ -442,6 +655,18 @@ curl -sS http://localhost:8088/v1/looks/packs | jq
 curl -sS http://localhost:8088/v1/looks/apply_random \
   -H "Content-Type: application/json" \
   -d '{"theme":"candy_cane","brightness":120}' | jq
+```
+
+### MQTT automation (optional)
+
+Publish to `MQTT_BASE_TOPIC` (default `wsa/<AGENT_ID>`):
+
+```bash
+mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/brightness -m 128
+mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/sequence/start -m '{"file":"sequence_ShowMix_*.json","loop":false}'
+mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/scheduler/enable -m true
+mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/ledfx/scene/activate -m "Holiday Glow"
+mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/ledfx/virtual/brightness -m 180
 ```
 
 ### Import a subset as WLED presets (optional)
@@ -592,6 +817,8 @@ Recommended env vars per agent:
 - `AGENT_ID` / `AGENT_NAME` / `AGENT_ROLE` – identify the agent (`tree`, `roofline1`, `roofline2`, etc.)
 - `AGENT_BASE_URL` – advertised in SQL heartbeats for DB-discovered targeting (defaults to `http://<AGENT_ID>:8088` in Docker)
 - `AGENT_TAGS` – optional comma-separated tags for UI filtering/grouping
+- `FLEET_STALE_AFTER_S` – heartbeat freshness threshold (seconds) used for DB discovery (default `30`)
+- `FLEET_DB_DISCOVERY_ENABLED` – if false, disable DB-discovered targeting (role:/tag:/* + agent-id fallback)
 - `A2A_API_KEY` – recommended shared key (set the same on all agents)
 
 On the agent you want to use as the **fleet coordinator** (often the tree), set:
@@ -698,11 +925,27 @@ curl -sS http://localhost:8088/v1/fpp/export/fleet_sequence_start_script \
   }' | jq
 ```
 
+Optional: export an **event script** (name it `event-<id>.sh` for FPP events):
+
+```bash
+curl -sS http://localhost:8088/v1/fpp/export/event_script \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": 1,
+    "coordinator_base_url":"http://172.16.200.10:8088",
+    "path":"/v1/fleet/sequences/start",
+    "payload":{"file":"<sequence filename>","loop":false},
+    "include_a2a_key":true
+  }' | jq
+```
+
 #### 2) Agent → FPP (control plane)
 
 Set `FPP_BASE_URL` (and optionally `FPP_HEADERS_JSON`) on the coordinator, then use:
 
 - `/v1/fpp/playlist/start` / `/v1/fpp/playlist/stop`
+- `/v1/fpp/playlists/sync` to create/update playlists from sequence filenames
+- `/v1/fpp/playlists/import` to fetch playlists from FPP (and optionally store locally)
 - `/v1/fpp/event/trigger`
 - `/v1/command` can also call `fpp_start_playlist`, `fpp_stop_playlist`, and `fpp_trigger_event` when OpenAI is enabled.
 
@@ -801,11 +1044,7 @@ curl -sS http://localhost:8088/v1/fleet/stop_all \
 - `./data/sequences/sequence_*.json` – generated cue lists
 - `./data/fseq/*.fseq` – exported `.fseq` files (renderable sequences only)
 - `./data/audio/beats.json` – audio BPM + beat timestamps
-- `./data/jobs/jobs.json` – job history (for the UI)
-- `./data/show/scheduler.json` – scheduler config (for the UI)
-- `./data/state/runtime_state.json` – last-known runtime state snapshot
-
-The agent persists job history + these small state files into SQL (and also writes best-effort JSON snapshots under `DATA_DIR`).
+- Job history, scheduler config, and runtime state are stored in SQL.
 
 Safe to delete any time.
 

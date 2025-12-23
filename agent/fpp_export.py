@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import aiofiles
+from aiofiles import os as aio_os
 
 @dataclass(frozen=True)
 class ExportedScript:
@@ -72,6 +74,24 @@ def write_script(*, out_dir: str, filename: str, script_text: str) -> ExportedSc
     p.write_text(script_text, encoding="utf-8")
     try:
         p.chmod(0o755)
+    except Exception:
+        pass
+    return ExportedScript(
+        filename=fname, rel_path=str(p), bytes_written=len(script_text.encode("utf-8"))
+    )
+
+
+async def write_script_async(
+    *, out_dir: str, filename: str, script_text: str
+) -> ExportedScript:
+    pdir = Path(out_dir)
+    await aio_os.makedirs(str(pdir), exist_ok=True)
+    fname = filename if filename.endswith(".sh") else (filename + ".sh")
+    p = (pdir / fname).resolve()
+    async with aiofiles.open(p, "w", encoding="utf-8") as f:
+        await f.write(script_text)
+    try:
+        await aio_os.chmod(str(p), 0o755)
     except Exception:
         pass
     return ExportedScript(

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+import inspect
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 
 @dataclass
@@ -25,10 +26,10 @@ class SimpleDirectorAgent:
         *,
         api_key: str,
         model: str,
-        tools: Dict[str, Callable[[Dict[str, Any]], Any]],
+        tools: Dict[str, Callable[[Dict[str, Any]], Any | Awaitable[Any]]],
         system_prompt: Optional[str] = None,
     ) -> None:
-        self.client = OpenAI(api_key=api_key)
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = model
         self.tools = tools
         self.system_prompt = system_prompt
@@ -139,6 +140,79 @@ class SimpleDirectorAgent:
             },
             {
                 "type": "function",
+                "name": "fleet_start_sequence_staggered",
+                "description": "Start a sequence across the fleet with staggered delays.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file": {"type": "string"},
+                        "loop": {"type": "boolean"},
+                        "targets": {"type": "array", "items": {"type": "string"}},
+                        "include_self": {"type": "boolean"},
+                        "stagger_s": {"type": "number", "minimum": 0.0, "maximum": 60.0},
+                        "start_delay_s": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 60.0,
+                        },
+                        "timeout_s": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 30.0,
+                        },
+                    },
+                    "required": ["file"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "orchestration_start",
+                "description": "Start a local orchestration playlist (steps with looks/sequences/DDP/blackout).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "loop": {"type": "boolean"},
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                    },
+                    "required": ["steps"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "orchestration_stop",
+                "description": "Stop the local orchestration playlist.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+            {
+                "type": "function",
+                "name": "fleet_orchestration_start",
+                "description": "Start an orchestration playlist across the fleet.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "loop": {"type": "boolean"},
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                        "targets": {"type": "array", "items": {"type": "string"}},
+                        "include_self": {"type": "boolean"},
+                        "timeout_s": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 30.0,
+                        },
+                    },
+                    "required": ["steps"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "fleet_orchestration_stop",
+                "description": "Stop the fleet orchestration playlist.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+            {
+                "type": "function",
                 "name": "fpp_start_playlist",
                 "description": "Start an FPP playlist by name (requires FPP_BASE_URL).",
                 "parameters": {
@@ -166,9 +240,68 @@ class SimpleDirectorAgent:
                     "required": ["event_id"],
                 },
             },
+            {
+                "type": "function",
+                "name": "ledfx_activate_scene",
+                "description": "Activate a LedFx scene by id or name (requires LEDFX_BASE_URL).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"scene_id": {"type": "string"}},
+                    "required": ["scene_id"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "ledfx_deactivate_scene",
+                "description": "Deactivate a LedFx scene by id or name (requires LEDFX_BASE_URL).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"scene_id": {"type": "string"}},
+                    "required": ["scene_id"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "ledfx_set_virtual_effect",
+                "description": "Set the active effect for a LedFx virtual (requires LEDFX_BASE_URL).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "virtual_id": {
+                            "type": "string",
+                            "description": "Virtual id/name. Optional if only one virtual exists.",
+                        },
+                        "effect": {"type": "string"},
+                        "config": {"type": "object"},
+                    },
+                    "required": ["effect"],
+                },
+            },
+            {
+                "type": "function",
+                "name": "ledfx_set_virtual_brightness",
+                "description": "Set brightness for a LedFx virtual (0..1 or 0..255). Requires LEDFX_BASE_URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "virtual_id": {
+                            "type": "string",
+                            "description": "Virtual id/name. Optional if only one virtual exists.",
+                        },
+                        "brightness": {"type": "number", "minimum": 0},
+                    },
+                    "required": ["brightness"],
+                },
+            },
         ]
 
-    def run(self, user_text: str) -> Dict[str, Any]:
+    async def close(self) -> None:
+        try:
+            await self.client.close()
+        except Exception:
+            return
+
+    async def run(self, user_text: str) -> Dict[str, Any]:
         if not user_text.strip():
             return {"ok": False, "error": "Empty command"}
 
@@ -180,7 +313,7 @@ class SimpleDirectorAgent:
             "For quadrant motion, you can use DDP patterns like 'quad_chase', 'opposite_pulse', 'quad_twinkle', 'quad_comets', and 'quad_spiral'."
         )
 
-        resp = self.client.responses.create(
+        resp = await self.client.responses.create(
             model=self.model,
             input=[
                 {
@@ -206,7 +339,12 @@ class SimpleDirectorAgent:
             except Exception:
                 kwargs = {}
             if name in self.tools:
-                out = self.tools[name](kwargs)
+                try:
+                    out = self.tools[name](kwargs)
+                    if inspect.isawaitable(out):
+                        out = await out
+                except Exception as e:
+                    out = {"ok": False, "error": str(e)}
             else:
                 out = {"ok": False, "error": f"Unknown tool '{name}'"}
             tool_results.append(ToolResult(name=name, output=out))
@@ -224,7 +362,7 @@ class SimpleDirectorAgent:
             return {"ok": True, "response": text.strip()}
 
         # Provide tool results back for a final short message
-        resp2 = self.client.responses.create(
+        resp2 = await self.client.responses.create(
             model=self.model,
             input=[
                 {"role": "user", "content": user_text},

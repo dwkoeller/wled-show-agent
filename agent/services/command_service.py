@@ -4,20 +4,74 @@ import asyncio
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from fpp_client import AsyncFPPClient
+from ledfx_client import AsyncLedFxClient
 from models.requests import CommandRequest
 from services import a2a_service
+from services.audit_logger import log_event
 from services.auth_service import require_a2a_auth
 from services.runtime_state_service import persist_runtime_state
 from services.state import AppState, get_state
-from utils.outbound_http import request_with_retry
+from utils.outbound_http import request_with_retry, retry_policy_from_settings
 
 
 def _peer_headers(state: AppState) -> Dict[str, str]:
     key = state.settings.a2a_api_key
     return {"X-A2A-Key": str(key)} if key else {}
+
+
+def _ledfx_client(state: AppState) -> AsyncLedFxClient:
+    base_url = str(state.settings.ledfx_base_url or "").strip()
+    if not base_url:
+        raise RuntimeError("LedFx is not configured; set LEDFX_BASE_URL.")
+    if state.peer_http is None:
+        raise RuntimeError("HTTP client not initialized")
+    return AsyncLedFxClient(
+        base_url=base_url,
+        client=state.peer_http,
+        timeout_s=float(state.settings.ledfx_http_timeout_s),
+        headers={k: v for (k, v) in state.settings.ledfx_headers},
+        retry=retry_policy_from_settings(state.settings),
+    )
+
+
+async def _resolve_ledfx_virtual_id(
+    state: AppState, virtual_id: str | None
+) -> str:
+    vid = str(virtual_id or "").strip()
+    if vid:
+        return vid
+    client = _ledfx_client(state)
+    resp = await client.virtuals()
+    body = resp.body
+    raw = None
+    if isinstance(body, dict):
+        raw = body.get("virtuals")
+        if raw is None:
+            data = body.get("data")
+            if isinstance(data, dict):
+                raw = data.get("virtuals")
+    if raw is None:
+        raw = body
+    ids: list[str] = []
+    if isinstance(raw, dict):
+        ids = [str(k) for k in raw.keys()]
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                candidate = item.get("id") or item.get("name")
+                if candidate:
+                    ids.append(str(candidate))
+            elif item:
+                ids.append(str(item))
+    ids = [x for x in ids if x.strip()]
+    if len(ids) == 1:
+        return ids[0]
+    if not ids:
+        raise ValueError("No LedFx virtuals found")
+    raise ValueError("virtual_id is required when multiple virtuals exist")
 
 
 async def _peer_get_json(
@@ -40,6 +94,7 @@ async def _peer_get_json(
             target_kind="peer",
             target=str(getattr(peer, "name", "") or base_url),
             timeout_s=float(timeout_s),
+            retry=retry_policy_from_settings(state.settings),
             headers=_peer_headers(state),
         )
     except Exception as e:
@@ -82,6 +137,7 @@ async def _peer_post_json(
             target_kind="peer",
             target=str(getattr(peer, "name", "") or base_url),
             timeout_s=float(timeout_s),
+            retry=retry_policy_from_settings(state.settings),
             headers=_peer_headers(state),
             json_body=payload,
         )
@@ -169,11 +225,168 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
             "response": (
                 "Supported commands: status; stop all; apply look [theme] [brightness=1..255]; "
                 "start pattern <name> [duration_s=..] [brightness=..] [fps=..] [cw/ccw] [front/right/back/left]; "
-                "start sequence <file> [loop]; stop sequence; fpp status; start playlist <name>; stop playlist; trigger event <id>."
+                "start sequence <file> [loop]; stop sequence; "
+                "ledfx status; ledfx scenes; ledfx virtuals; ledfx activate scene <id>; ledfx deactivate scene <id>; "
+                "ledfx effect <name> [virtual <id>]; ledfx brightness <0..1|0..255> [virtual <id>]; "
+                "fpp status; start playlist <name>; stop playlist; trigger event <id>."
             ),
         }
 
     peers = state.peers or {}
+
+    if "ledfx" in command_lower:
+        from services.ledfx_service import _record_last_applied
+
+        def _extract_virtual_id(raw: str) -> tuple[str | None, str]:
+            m = re.search(r"(?:virtual|virtual_id)\\s*[:=]?\\s*(\\S+)", raw, re.I)
+            if not m:
+                return None, raw
+            vid = m.group(1).strip()
+            trimmed = (raw[: m.start()] + raw[m.end() :]).strip()
+            return vid, trimmed
+
+        if "status" in command_lower:
+            res = await _ledfx_client(state).status()
+            return {"ok": True, "mode": "local", "action": "ledfx_status", "result": res.as_dict()}
+
+        if "scenes" in command_lower:
+            res = await _ledfx_client(state).scenes()
+            return {"ok": True, "mode": "local", "action": "ledfx_scenes", "result": res.as_dict()}
+
+        if "virtuals" in command_lower:
+            res = await _ledfx_client(state).virtuals()
+            return {"ok": True, "mode": "local", "action": "ledfx_virtuals", "result": res.as_dict()}
+
+        scene_match = re.search(
+            r"ledfx\\s+activate\\s+scene\\s+(.+)$", command_text, flags=re.IGNORECASE
+        )
+        if not scene_match:
+            scene_match = re.search(
+                r"ledfx\\s+scene\\s+(.+)$", command_text, flags=re.IGNORECASE
+            )
+        if scene_match:
+            scene_id = scene_match.group(1).strip()
+            if not scene_id:
+                return {"ok": False, "error": "scene_id is required"}
+            res = await _ledfx_client(state).activate_scene(scene_id)
+            try:
+                await _record_last_applied(
+                    state,
+                    kind="ledfx_scene",
+                    name=scene_id,
+                    file=None,
+                    payload={"action": "activate", "scene_id": scene_id},
+                )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "mode": "local",
+                "action": "ledfx_activate_scene",
+                "result": res.as_dict(),
+            }
+
+        scene_stop_match = re.search(
+            r"ledfx\\s+deactivate\\s+scene\\s+(.+)$",
+            command_text,
+            flags=re.IGNORECASE,
+        )
+        if scene_stop_match:
+            scene_id = scene_stop_match.group(1).strip()
+            if not scene_id:
+                return {"ok": False, "error": "scene_id is required"}
+            res = await _ledfx_client(state).deactivate_scene(scene_id)
+            try:
+                await _record_last_applied(
+                    state,
+                    kind="ledfx_scene",
+                    name=scene_id,
+                    file=None,
+                    payload={"action": "deactivate", "scene_id": scene_id},
+                )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "mode": "local",
+                "action": "ledfx_deactivate_scene",
+                "result": res.as_dict(),
+            }
+
+        effect_match = re.search(
+            r"ledfx\\s+effect\\s+(.+)$", command_text, flags=re.IGNORECASE
+        )
+        if effect_match:
+            raw = effect_match.group(1).strip()
+            virtual_id, raw = _extract_virtual_id(raw)
+            effect = raw.strip()
+            if effect.lower().startswith("on "):
+                effect = effect[3:].strip()
+            if not effect:
+                return {"ok": False, "error": "effect is required"}
+            vid = await _resolve_ledfx_virtual_id(state, virtual_id)
+            res = await _ledfx_client(state).set_virtual_effect(
+                virtual_id=vid,
+                effect=effect,
+                config={},
+            )
+            try:
+                await _record_last_applied(
+                    state,
+                    kind="ledfx_effect",
+                    name=effect,
+                    file=vid,
+                    payload={"virtual_id": vid, "effect": effect},
+                )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "mode": "local",
+                "action": "ledfx_virtual_effect",
+                "result": res.as_dict(),
+            }
+
+        brightness_match = re.search(
+            r"ledfx\\s+brightness\\s+(.+)$", command_text, flags=re.IGNORECASE
+        )
+        if brightness_match:
+            raw = brightness_match.group(1).strip()
+            virtual_id, raw = _extract_virtual_id(raw)
+            val_match = re.search(r"(\\d+(?:\\.\\d+)?)", raw)
+            if not val_match:
+                return {"ok": False, "error": "brightness value is required"}
+            value = float(val_match.group(1))
+            vid = await _resolve_ledfx_virtual_id(state, virtual_id)
+            primary = value if value <= 1.0 else min(255.0, value)
+            fallback = value if value > 1.0 else None
+            if primary > 1.0:
+                raw_val = min(255.0, primary)
+                primary = max(0.0, min(1.0, raw_val / 255.0))
+                fallback = raw_val
+            res = await _ledfx_client(state).set_virtual_brightness(
+                virtual_id=vid,
+                brightness=primary,
+                fallback_brightness=fallback,
+            )
+            try:
+                await _record_last_applied(
+                    state,
+                    kind="ledfx_brightness",
+                    name=str(value),
+                    file=vid,
+                    payload={"virtual_id": vid, "brightness": float(value)},
+                )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "mode": "local",
+                "action": "ledfx_virtual_brightness",
+                "result": res.as_dict(),
+            }
+
+        return {"ok": False, "error": "Unrecognized LedFx command"}
 
     if "status" in command_lower and "fpp" not in command_lower:
         res = await a2a_service.actions()["status"](state, {})
@@ -218,7 +431,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
     ):
         fleet = getattr(state, "fleet_sequences", None)
         if fleet is not None:
-            st = await asyncio.to_thread(fleet.stop)
+            st = await fleet.stop()
             return {
                 "ok": True,
                 "mode": "local",
@@ -228,7 +441,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
         seq = getattr(state, "sequences", None)
         if seq is None:
             raise RuntimeError("Sequence service not initialized")
-        st = await asyncio.to_thread(seq.stop)
+        st = await seq.stop()
         return {
             "ok": True,
             "mode": "local",
@@ -246,8 +459,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
         loop = (" loop" in command_lower) or (" repeat" in command_lower)
         fleet = getattr(state, "fleet_sequences", None)
         if fleet is not None and "fleet" in command_lower:
-            st = await asyncio.to_thread(
-                fleet.start,
+            st = await fleet.start(
                 file=file,
                 loop=loop,
                 targets=None,
@@ -263,7 +475,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
         seq = getattr(state, "sequences", None)
         if seq is None:
             raise RuntimeError("Sequence service not initialized")
-        st = await asyncio.to_thread(seq.play, file=file, loop=loop)
+        st = await seq.play(file=file, loop=loop)
         return {
             "ok": True,
             "mode": "local",
@@ -299,9 +511,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
         if brightness is not None:
             bri_i = min(state.settings.wled_max_bri, max(1, int(brightness)))
 
-        pack, row = await asyncio.to_thread(
-            looks.choose_random, theme=theme, pack_file=None, seed=None
-        )
+        pack, row = await looks.choose_random(theme=theme, pack_file=None, seed=None)
 
         out: Dict[str, Any] = {
             "picked": {
@@ -315,9 +525,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
         try:
             if state.wled_cooldown is not None:
                 await state.wled_cooldown.wait()
-            res = await asyncio.to_thread(
-                looks.apply_look, row, brightness_override=bri_i
-            )
+            res = await looks.apply_look(row, brightness_override=bri_i)
             out["self"] = {"ok": True, "result": res}
         except Exception as e:
             out["self"] = {"ok": False, "error": str(e)}
@@ -478,6 +686,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
             client=state.peer_http,
             timeout_s=float(state.settings.fpp_http_timeout_s),
             headers={k: v for (k, v) in state.settings.fpp_headers},
+            retry=retry_policy_from_settings(state.settings),
         )
         return {
             "ok": True,
@@ -502,6 +711,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
             client=state.peer_http,
             timeout_s=float(state.settings.fpp_http_timeout_s),
             headers={k: v for (k, v) in state.settings.fpp_headers},
+            retry=retry_policy_from_settings(state.settings),
         )
         res = (
             await fpp.start_playlist(name, repeat=("repeat" in command_lower))
@@ -523,6 +733,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
             client=state.peer_http,
             timeout_s=float(state.settings.fpp_http_timeout_s),
             headers={k: v for (k, v) in state.settings.fpp_headers},
+            retry=retry_policy_from_settings(state.settings),
         )
         return {
             "ok": True,
@@ -543,6 +754,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
             client=state.peer_http,
             timeout_s=float(state.settings.fpp_http_timeout_s),
             headers={k: v for (k, v) in state.settings.fpp_headers},
+            retry=retry_policy_from_settings(state.settings),
         )
         return {
             "ok": True,
@@ -554,19 +766,64 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
     return {"ok": False, "error": "Unrecognized command (try 'help')"}
 
 
+async def run_command_text(
+    *,
+    state: AppState,
+    request: Request | None,
+    text: str,
+) -> Dict[str, Any]:
+    director = getattr(state, "director", None)
+    payload = {"text": str(text or "")[:200]}
+    if director is not None:
+        try:
+            result = await director.run(text)
+        except Exception as e:
+            await log_event(
+                state,
+                action="command.run",
+                ok=False,
+                error=str(e),
+                payload=payload,
+                request=request,
+            )
+            raise HTTPException(status_code=500, detail=str(e))
+        ok = not (isinstance(result, dict) and result.get("ok") is False)
+        await log_event(
+            state,
+            action="command.run",
+            ok=ok,
+            payload=payload,
+            request=request,
+        )
+        return result
+
+    try:
+        result = await _local_command(state, text)
+    except Exception as e:
+        await log_event(
+            state,
+            action="command.run",
+            ok=False,
+            error=str(e),
+            payload=payload,
+            request=request,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+    ok = not (isinstance(result, dict) and result.get("ok") is False)
+    await log_event(
+        state,
+        action="command.run",
+        ok=ok,
+        payload=payload,
+        request=request,
+    )
+    return result
+
+
 async def command(
     req: CommandRequest,
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
-    director = getattr(state, "director", None)
-    if director is not None:
-        try:
-            return await asyncio.to_thread(director.run, req.text)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    try:
-        return await _local_command(state, req.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return await run_command_text(state=state, request=request, text=req.text)

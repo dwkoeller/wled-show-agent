@@ -19,6 +19,19 @@ router.add_api_route(
     "/v1/sequences/status", sequences_service.sequences_status, methods=["GET"]
 )
 router.add_api_route(
+    "/v1/sequences/preview", sequences_service.sequences_preview, methods=["GET"]
+)
+router.add_api_route(
+    "/v1/sequences/preview/cache",
+    sequences_service.sequences_preview_cache,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/v1/sequences/preview/purge",
+    sequences_service.sequences_preview_purge,
+    methods=["POST"],
+)
+router.add_api_route(
     "/v1/sequences/play", sequences_service.sequences_play, methods=["POST"]
 )
 router.add_api_route(

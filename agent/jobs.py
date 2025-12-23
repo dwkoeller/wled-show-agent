@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import queue
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import (
     Any,
     Awaitable,
@@ -18,8 +14,8 @@ from typing import (
     List,
     Literal,
     Optional,
-    Protocol,
 )
+
 
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
@@ -118,455 +114,13 @@ class Job:
         }
 
 
-@dataclass(frozen=True)
-class JobUpdateEvent:
-    """
-    JSON-serializable job update event for SSE.
-    """
-
-    type: str
-    job: Dict[str, Any]
-
-    def to_sse_data(self) -> str:
-        return json.dumps({"type": self.type, "job": self.job}, ensure_ascii=False)
-
-
-class JobContext:
-    def __init__(self, manager: "JobManager", job_id: str) -> None:
-        self._manager = manager
-        self.job_id = job_id
-
-    def log(self, message: str) -> None:
-        self._manager.log(self.job_id, message)
-
-    def set_progress(
-        self,
-        *,
-        current: Optional[float] = None,
-        total: Optional[float] = None,
-        message: Optional[str] = None,
-    ) -> None:
-        self._manager.set_progress(
-            self.job_id, current=current, total=total, message=message
-        )
-
-    def check_cancelled(self) -> None:
-        if self._manager.is_cancel_requested(self.job_id):
-            raise JobCanceled("Job canceled")
-
-
-class JobStore(Protocol):
-    def list_jobs(self, *, limit: int) -> List[Dict[str, Any]]: ...
-
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]: ...
-
-    def upsert_job(self, job: Dict[str, Any]) -> None: ...
-
-    def mark_in_flight_failed(self, *, reason: str = "Server restarted") -> int: ...
-
-
-class JobManager:
-    def __init__(
-        self,
-        *,
-        max_jobs: int = 200,
-        subscriber_queue_size: int = 200,
-        persist_path: Optional[str] = None,
-        store: Optional[JobStore] = None,
-    ) -> None:
-        self._lock = threading.Lock()
-        self._jobs: Dict[str, Job] = {}
-        self._max_jobs = max(10, int(max_jobs))
-
-        self._subs_lock = threading.Lock()
-        self._subs: List[queue.Queue[str]] = []
-        self._subscriber_queue_size = max(10, int(subscriber_queue_size))
-
-        self._store = store
-        self._persist_path = str(persist_path).strip() if persist_path else None
-        if self._store is not None:
-            try:
-                self._store.mark_in_flight_failed(reason="Server restarted")
-            except Exception:
-                pass
-            # Best-effort migrate any existing file-based history into the DB.
-            if self._persist_path:
-                try:
-                    for j in self._load_jobs_file(self._persist_path).values():
-                        try:
-                            self._store.upsert_job(j.as_dict())
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
-            self._load_from_store()
-        elif self._persist_path:
-            self._load_from_disk()
-
-    def list_jobs(self, *, limit: int = 50) -> List[Job]:
-        lim = max(1, int(limit))
-        store = self._store
-        if store is not None:
-            try:
-                persisted = store.list_jobs(limit=lim)
-                jobs = [Job.from_dict(d) for d in persisted]
-            except Exception:
-                jobs = []
-            # Overlay any in-memory jobs (active / newest) to reflect freshest progress/logs.
-            with self._lock:
-                for j in self._jobs.values():
-                    if not j.id:
-                        continue
-                    if all(pj.id != j.id for pj in jobs):
-                        jobs.append(j)
-                    else:
-                        # Replace the persisted copy with the in-memory copy.
-                        jobs = [j if pj.id == j.id else pj for pj in jobs]
-            jobs = sorted(jobs, key=lambda j: j.created_at, reverse=True)
-            return jobs[:lim]
-
-        with self._lock:
-            jobs_mem = sorted(
-                self._jobs.values(), key=lambda j: j.created_at, reverse=True
-            )
-            return jobs_mem[:lim]
-
-    def status_counts(self) -> Dict[str, int]:
-        """
-        Return counts by status for the in-memory job set (fast, no DB access).
-        """
-        out: Dict[str, int] = {}
-        with self._lock:
-            for j in self._jobs.values():
-                st = str(j.status)
-                out[st] = out.get(st, 0) + 1
-        return out
-
-    def get(self, job_id: str) -> Optional[Job]:
-        jid = str(job_id)
-        with self._lock:
-            j = self._jobs.get(jid)
-        if j is not None:
-            return j
-        store = self._store
-        if store is None:
-            return None
-        try:
-            row = store.get_job(jid)
-        except Exception:
-            return None
-        if not row:
-            return None
-        try:
-            return Job.from_dict(row)
-        except Exception:
-            return None
-
-    def is_cancel_requested(self, job_id: str) -> bool:
-        with self._lock:
-            j = self._jobs.get(str(job_id))
-            return bool(j.cancel_requested) if j else False
-
-    def cancel(self, job_id: str) -> Optional[Job]:
-        jid = str(job_id)
-        with self._lock:
-            j = self._jobs.get(jid)
-            if not j:
-                return None
-            j.cancel_requested = True
-            # If the job hasn't started, mark it canceled immediately.
-            if j.status == "queued":
-                j.status = "canceled"
-                j.finished_at = time.time()
-            job_copy = j.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
-        self._persist_job(jid)
-        return self.get(jid)
-
-    def log(self, job_id: str, message: str) -> None:
-        jid = str(job_id)
-        msg = str(message)
-        with self._lock:
-            j = self._jobs.get(jid)
-            if not j:
-                return
-            j.logs.append(msg)
-            if len(j.logs) > 200:
-                j.logs[:] = j.logs[-200:]
-            job_copy = j.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
-
-    def set_progress(
-        self,
-        job_id: str,
-        *,
-        current: Optional[float],
-        total: Optional[float],
-        message: Optional[str],
-    ) -> None:
-        jid = str(job_id)
-        with self._lock:
-            j = self._jobs.get(jid)
-            if not j:
-                return
-            if current is not None:
-                j.progress.current = float(current)
-            if total is not None:
-                j.progress.total = float(total)
-            if message is not None:
-                j.progress.message = str(message)
-            job_copy = j.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
-
-    def create(self, *, kind: str, runner: Callable[[JobContext], Any]) -> Job:
-        jid = uuid.uuid4().hex
-        now = time.time()
-        job = Job(id=jid, kind=str(kind), status="queued", created_at=now)
-        with self._lock:
-            self._jobs[jid] = job
-            self._trim_locked()
-            job_copy = job.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
-        self._persist_job(jid)
-
-        th = threading.Thread(
-            target=self._run_job,
-            args=(jid, runner),
-            name=f"job_{kind}_{jid[:8]}",
-            daemon=True,
-        )
-        th.start()
-        return job
-
-    def subscribe(self) -> queue.Queue[str]:
-        q: queue.Queue[str] = queue.Queue(maxsize=self._subscriber_queue_size)
-        with self._subs_lock:
-            self._subs.append(q)
-        return q
-
-    def unsubscribe(self, q: queue.Queue[str]) -> None:
-        with self._subs_lock:
-            try:
-                self._subs.remove(q)
-            except ValueError:
-                pass
-
-    def _broadcast(self, payload_json: str) -> None:
-        with self._subs_lock:
-            subs = list(self._subs)
-        for q in subs:
-            try:
-                q.put_nowait(payload_json)
-            except queue.Full:
-                # Best effort: drop updates if the client can't keep up.
-                continue
-
-    def _trim_locked(self) -> None:
-        if len(self._jobs) <= self._max_jobs:
-            return
-        jobs = sorted(self._jobs.values(), key=lambda j: j.created_at)
-        to_remove = jobs[: max(0, len(jobs) - self._max_jobs)]
-        for j in to_remove:
-            self._jobs.pop(j.id, None)
-
-    def _run_job(self, job_id: str, runner: Callable[[JobContext], Any]) -> None:
-        jid = str(job_id)
-        ctx = JobContext(self, jid)
-
-        with self._lock:
-            job = self._jobs.get(jid)
-            if not job:
-                return
-            if job.cancel_requested or job.status == "canceled":
-                # Canceled before starting.
-                job.status = "canceled"
-                job.finished_at = job.finished_at or time.time()
-                job_copy = job.as_dict()
-            else:
-                job.status = "running"
-                job.started_at = time.time()
-                job_copy = job.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
-        self._persist_job(jid)
-
-        # If canceled before start, do not run.
-        if job_copy.get("status") == "canceled":
-            self._persist_job(jid)
-            return
-
-        try:
-            ctx.check_cancelled()
-            ctx.set_progress(message="Running…")
-            result = runner(ctx)
-            ctx.check_cancelled()
-            with self._lock:
-                job = self._jobs.get(jid)
-                if job:
-                    job.status = "succeeded"
-                    job.finished_at = time.time()
-                    job.result = result
-                    job.error = None
-                    job_copy = job.as_dict()
-            self._broadcast(
-                JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
-            )
-            self._persist_job(jid)
-        except JobCanceled as e:
-            with self._lock:
-                job = self._jobs.get(jid)
-                if job:
-                    job.status = "canceled"
-                    job.finished_at = time.time()
-                    job.error = str(e)
-                    job_copy = job.as_dict()
-            self._broadcast(
-                JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
-            )
-            self._persist_job(jid)
-        except Exception as e:
-            with self._lock:
-                job = self._jobs.get(jid)
-                if job:
-                    job.status = "failed"
-                    job.finished_at = time.time()
-                    job.error = str(e)
-                    job_copy = job.as_dict()
-            self._broadcast(
-                JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
-            )
-            self._persist_job(jid)
-
-    def _load_from_store(self) -> None:
-        store = self._store
-        if store is None:
-            return
-        try:
-            rows = store.list_jobs(limit=self._max_jobs)
-        except Exception:
-            return
-
-        now = time.time()
-        loaded: Dict[str, Job] = {}
-        for row in rows:
-            try:
-                j = Job.from_dict(row)
-            except Exception:
-                continue
-            if not j.id:
-                continue
-            # Jobs can't survive a restart; mark in-flight ones failed.
-            if j.status in ("queued", "running"):
-                j.status = "failed"
-                j.finished_at = j.finished_at or now
-                j.error = j.error or "Server restarted"
-            loaded[j.id] = j
-
-        with self._lock:
-            self._jobs = loaded
-            self._trim_locked()
-
-    def _load_jobs_file(self, path_s: str) -> Dict[str, Job]:
-        p = Path(path_s)
-        if not p.is_file():
-            return {}
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-        rows: List[Dict[str, Any]] = []
-        if isinstance(raw, dict) and isinstance(raw.get("jobs"), list):
-            rows = [x for x in raw["jobs"] if isinstance(x, dict)]
-        elif isinstance(raw, list):
-            rows = [x for x in raw if isinstance(x, dict)]
-        else:
-            return {}
-
-        now = time.time()
-        loaded: Dict[str, Job] = {}
-        for row in rows:
-            try:
-                j = Job.from_dict(row)
-            except Exception:
-                continue
-            if not j.id:
-                continue
-            # Jobs can't survive a restart; mark in-flight ones failed.
-            if j.status in ("queued", "running"):
-                j.status = "failed"
-                j.finished_at = j.finished_at or now
-                j.error = j.error or "Server restarted"
-            loaded[j.id] = j
-        return loaded
-
-    def _load_from_disk(self) -> None:
-        path_s = self._persist_path
-        if not path_s:
-            return
-        loaded = self._load_jobs_file(path_s)
-        with self._lock:
-            self._jobs = loaded
-            self._trim_locked()
-
-    def _persist_job(self, job_id: str) -> None:
-        store = self._store
-        if store is not None:
-            with self._lock:
-                j = self._jobs.get(str(job_id))
-                job_dict = j.as_dict() if j else None
-            if job_dict is None:
-                return
-            try:
-                store.upsert_job(job_dict)
-            except Exception:
-                # Best-effort: fall back to filesystem persistence.
-                pass
-        self._persist()
-
-    def _persist(self) -> None:
-        path_s = self._persist_path
-        if not path_s:
-            return
-
-        with self._lock:
-            jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
-            jobs = jobs[: self._max_jobs]
-            payload = {"version": 1, "jobs": [j.as_dict() for j in jobs]}
-
-        p = Path(path_s)
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(p.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(tmp, p)
-        except Exception:
-            # Best-effort: persistence should never break jobs.
-            return
-
-
-def sse_format_event(*, event: str, data: str) -> str:
-    # SSE requires each line to be prefixed; split to preserve newlines.
-    out = [f"event: {event}"]
-    for line in str(data).splitlines() or [""]:
-        out.append(f"data: {line}")
-    return "\n".join(out) + "\n\n"
-
-
-def jobs_snapshot_payload(jobs: Iterable[Job]) -> str:
-    return json.dumps(
-        {"type": "snapshot", "jobs": [j.as_dict() for j in jobs]}, ensure_ascii=False
-    )
-
-
 # ----------------------------
 # Async Job Manager
 # ----------------------------
 
 
 AsyncJobRunner = Callable[["AsyncJobContext"], Awaitable[Any]]
+JobEventCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 
 class AsyncJobContext:
@@ -595,11 +149,11 @@ class AsyncJobContext:
 
 class AsyncJobManager:
     """
-    Async job runner with SSE broadcasting and optional DB/file persistence.
+    Async job runner with event callbacks and optional DB persistence.
 
     Notes:
-    - Job runners may use asyncio.to_thread and call ctx.set_progress/log from worker threads.
-      These methods are thread-safe and schedule SSE broadcasts onto the main loop.
+    - Job runners may call ctx.set_progress/log from worker threads (e.g., via the blocking
+      worker pool). These methods are thread-safe and schedule event callbacks onto the loop.
     - Persistence is best-effort and intentionally *not* performed on every progress update.
     """
 
@@ -608,11 +162,10 @@ class AsyncJobManager:
         *,
         loop: "asyncio.AbstractEventLoop",
         max_jobs: int = 200,
-        subscriber_queue_size: int = 200,
         queue_size: int = 50,
         worker_count: int = 2,
-        persist_path: Optional[str] = None,
         db: Any = None,
+        event_cb: JobEventCallback | None = None,
     ) -> None:
         import asyncio  # local import to avoid module-level event-loop use
 
@@ -620,10 +173,6 @@ class AsyncJobManager:
         self._lock = threading.Lock()
         self._jobs: Dict[str, Job] = {}
         self._max_jobs = max(10, int(max_jobs))
-
-        self._subs_lock = threading.Lock()
-        self._subs: List["asyncio.Queue[str]"] = []
-        self._subscriber_queue_size = max(10, int(subscriber_queue_size))
 
         self._queue: "asyncio.Queue[str]" = asyncio.Queue(
             maxsize=max(1, int(queue_size))
@@ -635,8 +184,10 @@ class AsyncJobManager:
         self._stop = asyncio.Event()
 
         self._db = db
-        self._persist_path = str(persist_path).strip() if persist_path else None
-        self._persist_lock = asyncio.Lock()
+        self._event_cb: JobEventCallback | None = event_cb
+
+    def set_event_callback(self, cb: JobEventCallback | None) -> None:
+        self._event_cb = cb
 
     async def init(self) -> None:
         """
@@ -650,30 +201,7 @@ class AsyncJobManager:
                 await db.mark_in_flight_failed(reason="Server restarted")
             except Exception:
                 pass
-            # Best-effort migrate file-based history into the DB.
-            if self._persist_path:
-                try:
-                    loaded = await asyncio.to_thread(
-                        self._load_jobs_file, self._persist_path
-                    )
-                    for j in loaded.values():
-                        try:
-                            await db.upsert_job(j.as_dict())
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
             await self._load_from_db()
-        elif self._persist_path:
-            try:
-                loaded = await asyncio.to_thread(
-                    self._load_jobs_file, self._persist_path
-                )
-                with self._lock:
-                    self._jobs = loaded
-                    self._trim_locked()
-            except Exception:
-                pass
 
         self._start_workers()
 
@@ -772,6 +300,25 @@ class AsyncJobManager:
                 out[st] = out.get(st, 0) + 1
         return out
 
+    def queue_full(self) -> bool:
+        try:
+            return bool(self._queue.full())
+        except Exception:
+            return False
+
+    def queue_stats(self) -> Dict[str, int]:
+        try:
+            size = int(self._queue.qsize())
+            maxsize = int(getattr(self._queue, "maxsize", 0) or 0)
+        except Exception:
+            size = 0
+            maxsize = 0
+        return {
+            "size": size,
+            "max": maxsize,
+            "workers": int(self._worker_count),
+        }
+
     # ---- Mutation (thread-safe) ----
 
     def is_cancel_requested(self, job_id: str) -> bool:
@@ -792,7 +339,9 @@ class AsyncJobManager:
                 j.finished_at = time.time()
             job_copy = j.as_dict()
 
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event("jobs", {"event": "cancel_requested", "job": job_copy})
+        if job_copy.get("status") == "canceled":
+            self._emit_event("jobs", {"event": "canceled", "job": job_copy})
         await self._persist_job(jid)
 
         # Cancel running task if present.
@@ -816,7 +365,7 @@ class AsyncJobManager:
             if len(j.logs) > 200:
                 j.logs[:] = j.logs[-200:]
             job_copy = j.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event("jobs", {"event": "log", "job": job_copy})
 
     def set_progress(
         self,
@@ -838,7 +387,7 @@ class AsyncJobManager:
             if message is not None:
                 j.progress.message = str(message)
             job_copy = j.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event("jobs", {"event": "progress", "job": job_copy})
 
     # ---- Creation / execution ----
 
@@ -856,7 +405,7 @@ class AsyncJobManager:
             self._trim_locked()
             job_copy = job.as_dict()
 
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event("jobs", {"event": "created", "job": job_copy})
         await self._persist_job(jid)
 
         try:
@@ -870,21 +419,6 @@ class AsyncJobManager:
             )
             await self._persist_job(jid)
         return job
-
-    def subscribe(self):  # type: ignore[no-untyped-def]
-        import asyncio
-
-        q: "asyncio.Queue[str]" = asyncio.Queue(maxsize=self._subscriber_queue_size)
-        with self._subs_lock:
-            self._subs.append(q)
-        return q
-
-    def unsubscribe(self, q) -> None:  # type: ignore[no-untyped-def]
-        with self._subs_lock:
-            try:
-                self._subs.remove(q)
-            except ValueError:
-                pass
 
     # ---- Internals ----
 
@@ -933,7 +467,15 @@ class AsyncJobManager:
                 job.started_at = time.time()
                 job_copy = job.as_dict()
 
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event(
+            "jobs",
+            {
+                "event": "canceled"
+                if job_copy.get("status") == "canceled"
+                else "started",
+                "job": job_copy,
+            },
+        )
         await self._persist_job(jid)
 
         # If canceled before start, do not run.
@@ -968,9 +510,7 @@ class AsyncJobManager:
                 else:
                     job_copy = {"id": jid, "status": "succeeded"}
 
-            self._broadcast(
-                JobUpdateEvent(type="job_update", job=job_copy).to_sse_data()
-            )
+            self._emit_event("jobs", {"event": "succeeded", "job": job_copy})
             await self._persist_job(jid)
         except JobCanceled as e:
             self._set_terminal_status(jid, status="canceled", error=str(e))
@@ -995,31 +535,36 @@ class AsyncJobManager:
             job.finished_at = job.finished_at or time.time()
             job.error = str(error) if error is not None else None
             job_copy = job.as_dict()
-        self._broadcast(JobUpdateEvent(type="job_update", job=job_copy).to_sse_data())
+        self._emit_event("jobs", {"event": str(status), "job": job_copy})
 
-    def _broadcast(self, payload_json: str) -> None:
+    def _emit_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        cb = self._event_cb
+        if cb is None:
+            return
+
+        async def _runner() -> None:
+            try:
+                await cb(event_type, dict(data))
+            except Exception:
+                return
+
+        def _schedule() -> None:
+            try:
+                self._loop.create_task(_runner())
+            except Exception:
+                return
+
         try:
             running = asyncio.get_running_loop()
         except Exception:
             running = None
-
         if running is self._loop:
-            self._broadcast_on_loop(payload_json)
+            _schedule()
         else:
             try:
-                self._loop.call_soon_threadsafe(self._broadcast_on_loop, payload_json)
+                self._loop.call_soon_threadsafe(_schedule)
             except Exception:
                 return
-
-    def _broadcast_on_loop(self, payload_json: str) -> None:
-        with self._subs_lock:
-            subs = list(self._subs)
-        for q in subs:
-            try:
-                q.put_nowait(payload_json)
-            except Exception:
-                # Drop updates if the client can't keep up or queue is closed.
-                continue
 
     def _trim_locked(self) -> None:
         if len(self._jobs) <= self._max_jobs:
@@ -1059,39 +604,6 @@ class AsyncJobManager:
             self._jobs = loaded
             self._trim_locked()
 
-    def _load_jobs_file(self, path_s: str) -> Dict[str, Job]:
-        p = Path(path_s)
-        if not p.is_file():
-            return {}
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-        rows: List[Dict[str, Any]] = []
-        if isinstance(raw, dict) and isinstance(raw.get("jobs"), list):
-            rows = [x for x in raw["jobs"] if isinstance(x, dict)]
-        elif isinstance(raw, list):
-            rows = [x for x in raw if isinstance(x, dict)]
-        else:
-            return {}
-
-        now = time.time()
-        loaded: Dict[str, Job] = {}
-        for row in rows:
-            try:
-                j = Job.from_dict(row)
-            except Exception:
-                continue
-            if not j.id:
-                continue
-            if j.status in ("queued", "running"):
-                j.status = "failed"
-                j.finished_at = j.finished_at or now
-                j.error = j.error or "Server restarted"
-            loaded[j.id] = j
-        return loaded
-
     async def _persist_job(self, job_id: str) -> None:
         jid = str(job_id)
         with self._lock:
@@ -1106,34 +618,4 @@ class AsyncJobManager:
                 await db.upsert_job(job_dict)
             except Exception:
                 pass
-
-        await self._persist_file()
-
-    async def _persist_file(self) -> None:
-        import asyncio
-
-        path_s = self._persist_path
-        if not path_s:
             return
-
-        with self._lock:
-            jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
-            jobs = jobs[: self._max_jobs]
-            payload = {"version": 1, "jobs": [j.as_dict() for j in jobs]}
-
-        async with self._persist_lock:
-            p = Path(path_s)
-
-            def _write() -> None:
-                try:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = p.with_suffix(p.suffix + ".tmp")
-                    tmp.write_text(
-                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-                    os.replace(tmp, p)
-                except Exception:
-                    return
-
-            await asyncio.to_thread(_write)

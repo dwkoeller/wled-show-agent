@@ -164,7 +164,11 @@ def _peer_names(entries: tuple[str, ...]) -> list[str]:
 async def _startup_db_and_heartbeat() -> None:
     global DB, HEARTBEAT_TASK
 
-    DB = DatabaseService(database_url=SETTINGS.database_url, agent_id=SETTINGS.agent_id)
+    DB = DatabaseService(
+        database_url=SETTINGS.database_url,
+        agent_id=SETTINGS.agent_id,
+        migrate_on_startup=bool(getattr(SETTINGS, "db_migrate_on_startup", True)),
+    )
     await DB.init()
     app.state.db = DB  # type: ignore[attr-defined]
 
@@ -316,6 +320,7 @@ def auth_config() -> Dict[str, Any]:
         "totp_enabled": bool(SETTINGS.auth_totp_enabled),
         "openai_enabled": False,
         "fpp_enabled": False,
+        "ledfx_enabled": False,
     }
 
 

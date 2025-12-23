@@ -18,6 +18,7 @@ import {
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
+import { useEventRefresh } from "../../hooks/useEventRefresh";
 
 export function SequenceTools() {
   const nav = useNavigate();
@@ -71,6 +72,13 @@ export function SequenceTools() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEventRefresh({
+    types: ["sequences", "looks", "files", "tick"],
+    refresh,
+    minIntervalMs: 4000,
+    ignoreEvents: ["list", "status"],
+  });
 
   const submit = async () => {
     setBusy(true);

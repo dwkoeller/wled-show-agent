@@ -38,3 +38,18 @@ router.add_api_route(
     scheduler_service.scheduler_events,
     methods=["GET"],
 )
+router.add_api_route(
+    "/v1/scheduler/events/export",
+    scheduler_service.scheduler_events_export,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/v1/scheduler/retention",
+    scheduler_service.scheduler_retention_status,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/v1/scheduler/retention",
+    scheduler_service.scheduler_retention_cleanup,
+    methods=["POST"],
+)

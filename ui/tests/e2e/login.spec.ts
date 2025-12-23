@@ -11,6 +11,7 @@ test("shows TOTP field when totp is enabled", async ({ page }) => {
         totp_enabled: true,
         openai_enabled: false,
         fpp_enabled: false,
+        mqtt_enabled: false,
         peers_configured: 0,
       },
     });
@@ -38,6 +39,7 @@ test("hides TOTP field when totp is disabled", async ({ page }) => {
         totp_enabled: false,
         openai_enabled: false,
         fpp_enabled: false,
+        mqtt_enabled: false,
         peers_configured: 0,
       },
     });

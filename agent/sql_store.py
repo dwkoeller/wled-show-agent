@@ -1,38 +1,10 @@
 from __future__ import annotations
 
-import time
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Column, Index
 from sqlalchemy.types import JSON
-from sqlmodel import Field, Session, SQLModel, create_engine, select
-
-
-def normalize_database_url(raw: str) -> str:
-    """
-    Normalize common DB URL variants to SQLAlchemy-compatible URLs.
-
-    - mysql://... -> mysql+pymysql://...
-    """
-    url = str(raw or "").strip()
-    if not url:
-        raise ValueError("Empty database URL")
-    if url.startswith("mysql://"):
-        return "mysql+pymysql://" + url[len("mysql://") :]
-    return url
-
-
-def create_db_engine(database_url: str, *, echo: bool = False):  # type: ignore[no-untyped-def]
-    url = normalize_database_url(database_url)
-    connect_args: Dict[str, Any] = {}
-    if url.startswith("sqlite:"):
-        connect_args["check_same_thread"] = False
-    return create_engine(
-        url,
-        echo=bool(echo),
-        pool_pre_ping=True,
-        connect_args=connect_args,
-    )
+from sqlmodel import Field, SQLModel
 
 
 class SchemaVersion(SQLModel, table=True):
@@ -130,6 +102,76 @@ class SequenceMetaRecord(SQLModel, table=True):
     steps_total: int = Field(default=0)
 
 
+class ShowConfigRecord(SQLModel, table=True):
+    """
+    Metadata for show config JSON files under DATA_DIR/show.
+    """
+
+    __tablename__ = "show_configs"
+    __table_args__ = (
+        Index("ix_show_configs_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    file: str = Field(primary_key=True, max_length=512)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    name: str = Field(default="", max_length=256)
+    props_total: int = Field(default=0)
+    groups_total: int = Field(default=0)
+    coordinator_base_url: str | None = Field(default=None, max_length=512)
+    fpp_base_url: str | None = Field(default=None, max_length=512)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class FseqExportRecord(SQLModel, table=True):
+    """
+    Metadata for FSEQ exports written under DATA_DIR/fseq.
+    """
+
+    __tablename__ = "fseq_exports"
+    __table_args__ = (
+        Index("ix_fseq_exports_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    file: str = Field(primary_key=True, max_length=512)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    source_sequence: str | None = Field(default=None, max_length=512)
+    bytes_written: int = Field(default=0)
+    frames: int | None = None
+    channels: int | None = None
+    step_ms: int | None = None
+    duration_s: float | None = None
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class FppScriptRecord(SQLModel, table=True):
+    """
+    Metadata for FPP helper scripts written under DATA_DIR/fpp/scripts.
+    """
+
+    __tablename__ = "fpp_scripts"
+    __table_args__ = (
+        Index("ix_fpp_scripts_agent_updated_at", "agent_id", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    file: str = Field(primary_key=True, max_length=512)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    kind: str = Field(default="", max_length=64)
+    bytes_written: int = Field(default=0)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
 class AudioAnalysisRecord(SQLModel, table=True):
     """
     Metadata for audio analysis runs (beats/BPM extraction).
@@ -202,6 +244,69 @@ class AgentHeartbeatRecord(SQLModel, table=True):
     payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
+class AgentOverrideRecord(SQLModel, table=True):
+    """
+    Operator-managed overrides for fleet targeting (tags/role).
+    """
+
+    __tablename__ = "agent_overrides"
+    __table_args__ = (
+        Index("ix_agent_overrides_updated_at", "updated_at"),
+    )
+
+    agent_id: str = Field(primary_key=True, max_length=128)
+    updated_at: float = Field(index=True)
+    updated_by: str | None = Field(default=None, max_length=128)
+    role: str | None = Field(default=None, max_length=128)
+    tags: List[str] = Field(sa_column=Column(JSON), default_factory=list)
+
+
+class AgentHeartbeatHistoryRecord(SQLModel, table=True):
+    """
+    Periodic snapshot history of agent heartbeats for fleet dashboards.
+    """
+
+    __tablename__ = "agent_heartbeat_history"
+    __table_args__ = (
+        Index(
+            "ix_agent_heartbeat_history_agent_created_at", "agent_id", "created_at"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+
+    name: str = Field(default="", max_length=256)
+    role: str = Field(default="", max_length=128)
+    controller_kind: str = Field(default="", max_length=32)
+    version: str = Field(default="", max_length=64)
+    base_url: str | None = Field(default=None, max_length=512)
+
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class AgentHeartbeatHistoryTagRecord(SQLModel, table=True):
+    """
+    Normalized tags for agent heartbeat history (fast tag filtering).
+    """
+
+    __tablename__ = "agent_heartbeat_history_tags"
+    __table_args__ = (
+        Index("ix_agent_hb_tags_tag_created_at", "tag", "created_at"),
+        Index("ix_agent_hb_tags_agent_created_at", "agent_id", "created_at"),
+        Index("ix_agent_hb_tags_history_id", "history_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    history_id: int = Field()
+    agent_id: str = Field(max_length=128)
+    tag: str = Field(max_length=128)
+    created_at: float = Field()
+
+
 class LeaseRecord(SQLModel, table=True):
     """
     Small DB-backed lease/lock record used for fleet-wide leader election (scheduler).
@@ -240,129 +345,318 @@ class SchedulerEventRecord(SQLModel, table=True):
     payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
-def init_db(engine) -> None:  # type: ignore[no-untyped-def]
-    SQLModel.metadata.create_all(engine)
+class AuditLogRecord(SQLModel, table=True):
+    """
+    Audit log for auth/admin actions (small, append-only).
+    """
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_agent_created_at", "agent_id", "created_at"),
+        Index("ix_audit_log_action_created_at", "action", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    actor: str = Field(index=True, max_length=128)
+    action: str = Field(index=True, max_length=128)
+    resource: str | None = Field(default=None, max_length=256)
+
+    ok: bool = Field(default=True, index=True)
+    error: str | None = Field(default=None, max_length=512)
+
+    ip: str | None = Field(default=None, max_length=64)
+    user_agent: str | None = Field(default=None, max_length=256)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
-class SQLJobStore:
-    def __init__(self, *, engine, agent_id: str) -> None:  # type: ignore[no-untyped-def]
-        self._engine = engine
-        self._agent_id = str(agent_id)
+class EventLogRecord(SQLModel, table=True):
+    """
+    Persisted SSE event history for diagnostics.
+    """
 
-    def list_jobs(self, *, limit: int) -> List[Dict[str, Any]]:
-        lim = max(1, int(limit))
-        with Session(self._engine) as session:
-            stmt = (
-                select(JobRecord)
-                .where(JobRecord.agent_id == self._agent_id)
-                .order_by(JobRecord.created_at.desc())
-                .limit(lim)
-            )
-            rows = session.exec(stmt).all()
-            return [dict(r.payload or {}) for r in rows]
+    __tablename__ = "event_log"
+    __table_args__ = (
+        Index("ix_event_log_agent_created_at", "agent_id", "created_at"),
+        Index("ix_event_log_type_created_at", "event_type", "created_at"),
+        Index("ix_event_log_event_created_at", "event", "created_at"),
+        Index("ix_event_log_created_id", "created_at", "id"),
+    )
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        jid = str(job_id)
-        with Session(self._engine) as session:
-            rec = session.get(JobRecord, (self._agent_id, jid))
-            if not rec:
-                return None
-            return dict(rec.payload or {})
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
 
-    def upsert_job(self, job: Dict[str, Any]) -> None:
-        if not isinstance(job, dict):
-            raise ValueError("job must be a dict")
-        jid = str(job.get("id") or "").strip()
-        if not jid:
-            raise ValueError("job.id is required")
+    created_at: float = Field(index=True)
+    event_type: str = Field(index=True, max_length=64)
+    event: str | None = Field(default=None, max_length=128)
 
-        now = time.time()
-        kind = str(job.get("kind") or "")
-        status = str(job.get("status") or "")
-        created_at = float(job.get("created_at") or now)
-
-        started_at_raw = job.get("started_at")
-        started_at = float(started_at_raw) if started_at_raw is not None else None
-        finished_at_raw = job.get("finished_at")
-        finished_at = float(finished_at_raw) if finished_at_raw is not None else None
-
-        with Session(self._engine) as session:
-            rec = session.get(JobRecord, (self._agent_id, jid))
-            if not rec:
-                rec = JobRecord(
-                    agent_id=self._agent_id,
-                    id=jid,
-                    kind=kind,
-                    status=status,
-                    created_at=created_at,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    updated_at=now,
-                    payload=dict(job),
-                )
-                session.add(rec)
-            else:
-                rec.kind = kind
-                rec.status = status
-                rec.created_at = created_at
-                rec.started_at = started_at
-                rec.finished_at = finished_at
-                rec.updated_at = now
-                rec.payload = dict(job)
-            session.commit()
-
-    def mark_in_flight_failed(self, *, reason: str = "Server restarted") -> int:
-        now = time.time()
-        updated = 0
-        with Session(self._engine) as session:
-            stmt = select(JobRecord).where(
-                JobRecord.agent_id == self._agent_id,
-                JobRecord.status.in_(("queued", "running")),
-            )
-            recs = session.exec(stmt).all()
-            for rec in recs:
-                payload = dict(rec.payload or {})
-                payload["status"] = "failed"
-                payload["finished_at"] = payload.get("finished_at") or now
-                payload["error"] = payload.get("error") or str(reason)
-                rec.status = "failed"
-                rec.finished_at = float(payload["finished_at"] or now)
-                rec.updated_at = now
-                rec.payload = payload
-                updated += 1
-            session.commit()
-        return updated
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
 
 
-class SQLKVStore:
-    def __init__(self, *, engine, agent_id: str) -> None:  # type: ignore[no-untyped-def]
-        self._engine = engine
-        self._agent_id = str(agent_id)
+class MetricsSampleRecord(SQLModel, table=True):
+    """
+    Time-series snapshots from /v1/metrics for UI charts.
+    """
 
-    def get_json(self, key: str) -> Optional[Dict[str, Any]]:
-        k = str(key)
-        with Session(self._engine) as session:
-            rec = session.get(KVRecord, (self._agent_id, k))
-            if not rec:
-                return None
-            return dict(rec.value or {})
+    __tablename__ = "metrics_samples"
+    __table_args__ = (
+        Index("ix_metrics_samples_agent_created_at", "agent_id", "created_at"),
+    )
 
-    def set_json(self, key: str, value: Dict[str, Any]) -> None:
-        if not isinstance(value, dict):
-            raise ValueError("value must be a dict")
-        now = time.time()
-        k = str(key)
-        with Session(self._engine) as session:
-            rec = session.get(KVRecord, (self._agent_id, k))
-            if not rec:
-                rec = KVRecord(
-                    agent_id=self._agent_id,
-                    key=k,
-                    updated_at=now,
-                    value=dict(value),
-                )
-                session.add(rec)
-            else:
-                rec.updated_at = now
-                rec.value = dict(value)
-            session.commit()
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+    created_at: float = Field(index=True)
+
+    jobs_count: int = Field(default=0)
+    scheduler_ok: bool = Field(default=True)
+    scheduler_running: bool = Field(default=False)
+    scheduler_in_window: bool = Field(default=False)
+
+    outbound_failures: int = Field(default=0)
+    outbound_retries: int = Field(default=0)
+
+    spool_dropped: int = Field(default=0)
+    spool_queued_events: int = Field(default=0)
+    spool_queued_bytes: int = Field(default=0)
+
+
+class AuthUserRecord(SQLModel, table=True):
+    """
+    Auth users stored in SQL for multi-user logins.
+    """
+
+    __tablename__ = "auth_users"
+    __table_args__ = (
+        Index("ix_auth_users_role", "role"),
+    )
+
+    username: str = Field(primary_key=True, max_length=64)
+    password_hash: str = Field(max_length=256)
+    totp_secret: str = Field(max_length=64)
+    role: str = Field(default="user", max_length=32)
+    disabled: bool = Field(default=False)
+    ip_allowlist: List[str] = Field(sa_column=Column(JSON), default_factory=list)
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+    last_login_at: float | None = Field(default=None, index=True)
+
+
+class AuthSessionRecord(SQLModel, table=True):
+    """
+    JWT sessions with revocation support.
+    """
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("ix_auth_sessions_user_created_at", "username", "created_at"),
+    )
+
+    jti: str = Field(primary_key=True, max_length=64)
+    username: str = Field(index=True, max_length=64)
+    created_at: float = Field(index=True)
+    expires_at: float = Field(index=True)
+    revoked_at: float | None = Field(default=None, index=True)
+    last_seen_at: float | None = Field(default=None, index=True)
+    ip: str | None = Field(default=None, max_length=64)
+    user_agent: str | None = Field(default=None, max_length=256)
+
+
+class AuthLoginAttemptRecord(SQLModel, table=True):
+    """
+    Failed login tracking for rate limiting / lockout.
+    """
+
+    __tablename__ = "auth_login_attempts"
+    username: str = Field(primary_key=True, max_length=64)
+    ip: str = Field(primary_key=True, max_length=64)
+    failed_count: int = Field(default=0)
+    first_failed_at: float = Field(index=True)
+    last_failed_at: float = Field(index=True)
+    locked_until: float | None = Field(default=None, index=True)
+
+
+class AuthApiKeyRecord(SQLModel, table=True):
+    """
+    Per-user API keys (hashed, with optional expiration).
+    """
+
+    __tablename__ = "auth_api_keys"
+    __table_args__ = (
+        Index("ix_auth_api_keys_key_hash", "key_hash", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(index=True, max_length=64)
+    label: str | None = Field(default=None, max_length=128)
+    prefix: str | None = Field(default=None, max_length=16)
+    key_hash: str = Field(max_length=128)
+    created_at: float = Field(index=True)
+    last_used_at: float | None = Field(default=None, index=True)
+    revoked_at: float | None = Field(default=None, index=True)
+    expires_at: float | None = Field(default=None, index=True)
+
+
+class AuthPasswordResetRecord(SQLModel, table=True):
+    """
+    One-time password reset tokens (hashed).
+    """
+
+    __tablename__ = "auth_password_resets"
+    __table_args__ = (
+        Index("ix_auth_password_resets_token_hash", "token_hash", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(index=True, max_length=64)
+    token_hash: str = Field(max_length=128)
+    created_at: float = Field(index=True)
+    expires_at: float = Field(index=True)
+    used_at: float | None = Field(default=None, index=True)
+    created_by: str | None = Field(default=None, max_length=64)
+    used_ip: str | None = Field(default=None, max_length=64)
+
+
+class OrchestrationPresetRecord(SQLModel, table=True):
+    """
+    Saved orchestration presets (local or fleet payloads).
+    """
+
+    __tablename__ = "orchestration_presets"
+    __table_args__ = (
+        Index("ix_orchestration_presets_scope_name", "scope", "name", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(max_length=128)
+    scope: str = Field(default="local", max_length=32)
+    description: str | None = Field(default=None, max_length=256)
+    tags: List[str] = Field(sa_column=Column(JSON), default_factory=list)
+    version: int = Field(default=1)
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class ReconcileRunRecord(SQLModel, table=True):
+    """
+    Reconcile run history (startup, scheduled, manual).
+    """
+
+    __tablename__ = "reconcile_runs"
+    __table_args__ = (
+        Index("ix_reconcile_runs_agent_started_at", "agent_id", "started_at"),
+        Index("ix_reconcile_runs_status_started_at", "status", "started_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+    started_at: float = Field(index=True)
+    finished_at: float | None = Field(default=None, index=True)
+    status: str = Field(index=True, max_length=32)
+    source: str = Field(default="manual", max_length=32)
+    error: str | None = Field(default=None, max_length=512)
+    cancel_requested: bool = Field(default=False, index=True)
+    options: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+    result: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class OrchestrationRunRecord(SQLModel, table=True):
+    """
+    Orchestration run history (local + fleet).
+    """
+
+    __tablename__ = "orchestration_runs"
+    __table_args__ = (
+        Index("ix_orchestration_runs_agent_started_at", "agent_id", "started_at"),
+        Index("ix_orchestration_runs_scope_started_at", "scope", "started_at"),
+        Index("ix_orchestration_runs_status_started_at", "status", "started_at"),
+    )
+
+    run_id: str = Field(primary_key=True, max_length=64)
+    agent_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+    started_at: float = Field(index=True)
+    finished_at: float | None = None
+
+    name: str | None = Field(default=None, max_length=256)
+    scope: str = Field(default="local", max_length=32)
+    status: str = Field(default="running", max_length=32)
+
+    steps_total: int = Field(default=0)
+    loop: bool = Field(default=False)
+    include_self: bool = Field(default=True)
+    duration_s: float = Field(default=0.0)
+
+    error: str | None = Field(default=None, max_length=512)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class OrchestrationStepRecord(SQLModel, table=True):
+    """
+    Per-step orchestration execution history (local + fleet).
+    """
+
+    __tablename__ = "orchestration_steps"
+    __table_args__ = (
+        Index("ix_orchestration_steps_run_created_at", "run_id", "created_at"),
+        Index("ix_orchestration_steps_agent_created_at", "agent_id", "created_at"),
+        Index("ix_orchestration_steps_status_created_at", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, max_length=64)
+    agent_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+    started_at: float = Field(index=True)
+    finished_at: float | None = None
+
+    step_index: int = Field(index=True)
+    iteration: int = Field(default=0, index=True)
+    kind: str = Field(default="", max_length=32)
+    status: str = Field(default="completed", max_length=32)
+    ok: bool = Field(default=True, index=True)
+    duration_s: float = Field(default=0.0)
+
+    error: str | None = Field(default=None, max_length=512)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)
+
+
+class OrchestrationPeerResultRecord(SQLModel, table=True):
+    """
+    Per-peer orchestration results (fleet runs).
+    """
+
+    __tablename__ = "orchestration_peer_results"
+    __table_args__ = (
+        Index("ix_orchestration_peer_run_created_at", "run_id", "created_at"),
+        Index("ix_orchestration_peer_peer_created_at", "peer_id", "created_at"),
+        Index("ix_orchestration_peer_status_created_at", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, max_length=64)
+    agent_id: str = Field(index=True, max_length=128)
+    peer_id: str = Field(index=True, max_length=128)
+
+    created_at: float = Field(index=True)
+    updated_at: float = Field(index=True)
+    started_at: float = Field(index=True)
+    finished_at: float | None = None
+
+    step_index: int = Field(index=True)
+    iteration: int = Field(default=0, index=True)
+    action: str = Field(default="", max_length=64)
+    status: str = Field(default="completed", max_length=32)
+    ok: bool = Field(default=True, index=True)
+    duration_s: float = Field(default=0.0)
+
+    error: str | None = Field(default=None, max_length=512)
+    payload: Dict[str, Any] = Field(sa_column=Column(JSON), default_factory=dict)

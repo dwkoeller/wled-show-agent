@@ -5,6 +5,7 @@ import ListAltIcon from "@mui/icons-material/ListAlt";
 import LogoutIcon from "@mui/icons-material/Logout";
 import {
   AppBar,
+  Badge,
   BottomNavigation,
   BottomNavigationAction,
   Box,
@@ -29,9 +30,11 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { JobsPage } from "./pages/JobsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ToolsPage } from "./pages/ToolsPage";
+import { useServerEvents } from "./hooks/useServerEvents";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading, config } = useAuth();
+  const authRequired = config ? config.auth_enabled : true;
   if (loading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
@@ -39,10 +42,27 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
       </Box>
     );
   }
-  if (config?.auth_enabled && !user) {
+  if (authRequired && !user) {
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;
+}
+
+function EventsStatusBadge() {
+  const { connected, enabled } = useServerEvents();
+  const color = enabled ? (connected ? "success" : "warning") : "default";
+  const label = enabled
+    ? connected
+      ? "Events connected"
+      : "Events disconnected"
+    : "Events disabled";
+  return (
+    <Box component="span" title={label} sx={{ display: "inline-flex" }}>
+      <Badge color={color} variant="dot" overlap="circular">
+        <Box sx={{ width: 12, height: 12 }} />
+      </Badge>
+    </Box>
+  );
 }
 
 export function App() {
@@ -65,12 +85,15 @@ export function App() {
             WLED Show Agent
           </Typography>
           {user ? (
-            <IconButton
-              color="inherit"
-              onClick={() => logout().then(() => nav("/login"))}
-            >
-              <LogoutIcon />
-            </IconButton>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <EventsStatusBadge />
+              <IconButton
+                color="inherit"
+                onClick={() => logout().then(() => nav("/login"))}
+              >
+                <LogoutIcon />
+              </IconButton>
+            </Box>
           ) : null}
         </Toolbar>
       </AppBar>

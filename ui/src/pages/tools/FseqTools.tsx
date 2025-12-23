@@ -17,6 +17,7 @@ import {
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
+import { useEventRefresh } from "../../hooks/useEventRefresh";
 
 export function FseqTools() {
   const nav = useNavigate();
@@ -59,6 +60,12 @@ export function FseqTools() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEventRefresh({
+    types: ["fseq", "sequences", "tick"],
+    refresh,
+    minIntervalMs: 4000,
+  });
 
   const suggestedOut = useMemo(() => {
     if (!sequenceFile) return null;

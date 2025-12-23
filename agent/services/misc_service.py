@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any, Dict, List
 
 from fastapi import Depends, HTTPException
 
 from models.requests import GoCrazyRequest
-from pack_io import read_jsonl
+from pack_io import read_jsonl_async
 from services.auth_service import require_a2a_auth
 from services.state import AppState, get_state
+from utils.blocking import run_cpu_blocking_state
+from utils.sequence_generate import generate_sequence_file
 
 
 async def _available_ddp_patterns(state: AppState) -> List[str]:
@@ -21,11 +22,10 @@ async def _available_ddp_patterns(state: AppState) -> List[str]:
     info = await state.wled.device_info()
     layout = None
     try:
-        from segment_layout import fetch_segment_layout
+        from segment_layout import fetch_segment_layout_async
 
-        layout = await asyncio.to_thread(
-            fetch_segment_layout,
-            state.wled_sync,
+        layout = await fetch_segment_layout_async(
+            state.wled,
             segment_ids=list(state.segment_ids or []),
             refresh=False,
         )
@@ -53,8 +53,7 @@ async def go_crazy(
             raise HTTPException(status_code=503, detail="Service not initialized")
 
         # 1) generate looks pack
-        summary = await asyncio.to_thread(
-            looks.generate_pack,
+        summary = await looks.generate_pack(
             total_looks=req.total_looks,
             themes=req.themes,
             brightness=min(state.settings.wled_max_bri, req.brightness),
@@ -69,13 +68,15 @@ async def go_crazy(
         seq_files: List[str] = []
         if req.sequences > 0:
             pack_path = os.path.join(state.settings.data_dir, "looks", summary.file)
-            looks_rows = await asyncio.to_thread(read_jsonl, pack_path)
+            looks_rows = await read_jsonl_async(pack_path)
             if len(looks_rows) > 2000:
                 looks_rows = looks_rows[:2000]
             ddp_pats = await _available_ddp_patterns(state)
             for i in range(req.sequences):
-                fname = await asyncio.to_thread(
-                    seq.generate,
+                fname = await run_cpu_blocking_state(
+                    state,
+                    generate_sequence_file,
+                    data_dir=state.settings.data_dir,
                     name=f"{i+1:02d}_Mix",
                     looks=looks_rows,
                     duration_s=req.sequence_duration_s,
@@ -91,8 +92,7 @@ async def go_crazy(
         # 3) optional preset import
         if req.import_presets:
             pack_path = os.path.join(state.settings.data_dir, "looks", summary.file)
-            res = await asyncio.to_thread(
-                imp.import_from_pack,
+            res = await imp.import_from_pack(
                 pack_path=pack_path,
                 start_id=req.import_start_id,
                 limit=req.import_limit,

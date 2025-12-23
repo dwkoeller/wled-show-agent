@@ -5,9 +5,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from aiofiles import os as aio_os
 from fastapi import Depends, HTTPException
 
-from pack_io import read_json, write_json
+from pack_io import read_json_async, write_json_async
 from services.auth_service import require_a2a_auth
 from services.state import AppState, get_state
 
@@ -33,20 +34,20 @@ async def persist_runtime_state(
 
         try:
             ddp = getattr(state, "ddp", None)
-            out["ddp"] = ddp.status().__dict__ if ddp is not None else None
+            out["ddp"] = (await ddp.status()).__dict__ if ddp is not None else None
         except Exception:
             out["ddp"] = None
 
         try:
             seq = getattr(state, "sequences", None)
-            out["sequence"] = seq.status().__dict__ if seq is not None else None
+            out["sequence"] = (await seq.status()).__dict__ if seq is not None else None
         except Exception:
             out["sequence"] = None
 
         try:
             fleet = getattr(state, "fleet_sequences", None)
             if fleet is not None:
-                out["fleet_sequence"] = fleet.status().__dict__
+                out["fleet_sequence"] = (await fleet.status()).__dict__
         except Exception:
             pass
 
@@ -59,14 +60,14 @@ async def persist_runtime_state(
                     await db.kv_set_json(key, dict(out))
             except Exception:
                 pass
-
-        # Persist to filesystem (always).
-        p = Path(path_s)
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        await asyncio.to_thread(write_json, str(p), out)
+        else:
+            # Persist to filesystem only when DB is unavailable.
+            p = Path(path_s)
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            await write_json_async(str(p), out)
     except Exception:
         return
 
@@ -86,11 +87,12 @@ async def runtime_state(
                         return dict(row)
             except Exception:
                 pass
+            return {"ok": True, "exists": False}
 
         p = Path(str(getattr(state, "runtime_state_path", "") or ""))
-        if not p.is_file():
+        if not await aio_os.path.isfile(str(p)):
             return {"ok": True, "exists": False}
-        return await asyncio.to_thread(read_json, str(p))
+        return await read_json_async(str(p))
     except HTTPException:
         raise
     except Exception as e:

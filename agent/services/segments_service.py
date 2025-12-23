@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException
@@ -15,11 +14,10 @@ async def segments_layout(
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     try:
-        from segment_layout import fetch_segment_layout
+        from segment_layout import fetch_segment_layout_async
 
-        layout = await asyncio.to_thread(
-            fetch_segment_layout,
-            state.wled_sync,
+        layout = await fetch_segment_layout_async(
+            state.wled,
             segment_ids=list(state.segment_ids or []),
             refresh=True,
         )
@@ -46,11 +44,10 @@ async def _get_orientation(
 ) -> Optional[OrientationInfo]:
     ordered = list(state.segment_ids or [])
     try:
-        from segment_layout import fetch_segment_layout
+        from segment_layout import fetch_segment_layout_async
 
-        layout = await asyncio.to_thread(
-            fetch_segment_layout,
-            state.wled_sync,
+        layout = await fetch_segment_layout_async(
+            state.wled,
             segment_ids=list(state.segment_ids or []),
             refresh=bool(refresh),
         )

@@ -8,11 +8,20 @@ from services import jobs_service
 router = APIRouter()
 
 router.add_api_route("/v1/jobs", jobs_service.jobs_list, methods=["GET"])
+router.add_api_route(
+    "/v1/jobs/retention",
+    jobs_service.jobs_retention_status,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/v1/jobs/retention",
+    jobs_service.jobs_retention_cleanup,
+    methods=["POST"],
+)
 router.add_api_route("/v1/jobs/{job_id}", jobs_service.jobs_get, methods=["GET"])
 router.add_api_route(
     "/v1/jobs/{job_id}/cancel", jobs_service.jobs_cancel, methods=["POST"]
 )
-router.add_api_route("/v1/jobs/stream", jobs_service.jobs_stream, methods=["GET"])
 router.add_api_route(
     "/v1/jobs/looks/generate",
     jobs_service.jobs_looks_generate,

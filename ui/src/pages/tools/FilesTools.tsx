@@ -20,7 +20,8 @@ import {
   Typography,
 } from "@mui/material";
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../../api";
+import { api, csrfHeaders } from "../../api";
+import { useEventRefresh } from "../../hooks/useEventRefresh";
 
 const commonDirs = [
   { label: "(root)", value: "" },
@@ -57,6 +58,8 @@ export function FilesTools() {
   const [dir, setDir] = useState("music");
   const [glob, setGlob] = useState("*");
   const [recursive, setRecursive] = useState(true);
+  const [deleteDir, setDeleteDir] = useState("");
+  const [deleteDirRecursive, setDeleteDirRecursive] = useState(true);
 
   const [uploadDir, setUploadDir] = useState("audio");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -64,6 +67,7 @@ export function FilesTools() {
   const [overwrite, setOverwrite] = useState(false);
   const [lastUpload, setLastUpload] = useState<UploadResult | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<number | null>(null);
 
   const uploadPath = useMemo(() => {
     const name = uploadName.trim() || uploadFile?.name || "";
@@ -116,6 +120,13 @@ export function FilesTools() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEventRefresh({
+    types: ["files", "packs", "meta", "tick"],
+    refresh,
+    minIntervalMs: 2000,
+    ignoreEvents: ["list", "status"],
+  });
+
   const doUpload = async () => {
     if (!uploadFile) return;
     if (uploadValidationError) {
@@ -139,6 +150,10 @@ export function FilesTools() {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/v1/files/upload");
         xhr.withCredentials = true;
+        const csrf = csrfHeaders("POST");
+        for (const [key, value] of Object.entries(csrf)) {
+          xhr.setRequestHeader(key, value);
+        }
 
         xhr.upload.onprogress = (ev) => {
           if (!ev.lengthComputable || ev.total <= 0) {
@@ -197,6 +212,53 @@ export function FilesTools() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDeleteDir = async () => {
+    const target = deleteDir.trim().replace(/^\/+/, "");
+    if (!target) {
+      setError("Enter a directory path to delete.");
+      return;
+    }
+    const desc = deleteDirRecursive ? " recursively" : "";
+    if (!window.confirm(`Delete directory ${target}${desc}?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const q = new URLSearchParams();
+      q.set("dir", target);
+      q.set("recursive", deleteDirRecursive ? "true" : "false");
+      await api(`/v1/files/delete_dir?${q.toString()}`, { method: "DELETE" });
+      setDeleteDir("");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDeleteAll = async () => {
+    if (!files.length) return;
+    if (!window.confirm(`Delete ${files.length} listed files?`)) return;
+    setBusy(true);
+    setError(null);
+    setBulkProgress(0);
+    try {
+      for (let i = 0; i < files.length; i += 1) {
+        const f = files[i];
+        await api(`/v1/files/delete?path=${encodeURIComponent(f)}`, {
+          method: "DELETE",
+        });
+        setBulkProgress(Math.round(((i + 1) / files.length) * 100));
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkProgress(null);
       setBusy(false);
     }
   };
@@ -360,10 +422,58 @@ export function FilesTools() {
 
       <Card>
         <CardContent>
+          <Typography variant="h6">Delete directory</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Removes a directory under <code>DATA_DIR</code> (optionally recursive).
+          </Typography>
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            <TextField
+              label="Directory path"
+              value={deleteDir}
+              onChange={(e) => setDeleteDir(e.target.value)}
+              disabled={busy}
+              helperText="Example: packs/holiday-2024"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={deleteDirRecursive}
+                  onChange={(e) => setDeleteDirRecursive(e.target.checked)}
+                />
+              }
+              label="Recursive"
+            />
+          </Stack>
+        </CardContent>
+        <CardActions>
+          <Button
+            color="error"
+            startIcon={<DeleteIcon />}
+            onClick={doDeleteDir}
+            disabled={busy || !deleteDir.trim()}
+          >
+            Delete directory
+          </Button>
+        </CardActions>
+      </Card>
+
+      <Card>
+        <CardContent>
           <Typography variant="h6">Files</Typography>
           <Typography variant="body2" color="text.secondary">
             Downloads are served from <code>DATA_DIR</code>.
           </Typography>
+          {bulkProgress != null ? (
+            <Stack spacing={0.5} sx={{ mt: 2 }}>
+              <LinearProgress
+                variant="determinate"
+                value={Math.max(0, Math.min(100, bulkProgress))}
+              />
+              <Typography variant="body2" color="text.secondary">
+                Deleting… {bulkProgress}%
+              </Typography>
+            </Stack>
+          ) : null}
           <Stack spacing={1} sx={{ mt: 2 }}>
             {files.length ? (
               files.map((f) => (
@@ -402,6 +512,16 @@ export function FilesTools() {
             )}
           </Stack>
         </CardContent>
+        <CardActions>
+          <Button
+            color="error"
+            startIcon={<DeleteIcon />}
+            onClick={doDeleteAll}
+            disabled={busy || !files.length}
+          >
+            Delete all listed files
+          </Button>
+        </CardActions>
       </Card>
     </Stack>
   );

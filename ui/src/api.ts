@@ -4,6 +4,51 @@ export type ApiErrorBody = {
   detail?: string;
 };
 
+type CsrfConfig = {
+  enabled: boolean;
+  cookieName: string;
+  headerName: string;
+};
+
+let csrfConfig: CsrfConfig = {
+  enabled: false,
+  cookieName: "wsa_csrf",
+  headerName: "X-CSRF-Token",
+};
+
+export function setCsrfConfig(next: Partial<CsrfConfig>) {
+  csrfConfig = {
+    ...csrfConfig,
+    ...next,
+  };
+}
+
+export function csrfHeaders(method?: string): Record<string, string> {
+  const verb = (method || "GET").toUpperCase();
+  if (csrfConfig.enabled && !["GET", "HEAD", "OPTIONS"].includes(verb)) {
+    const token = readCookie(csrfConfig.cookieName);
+    if (token) {
+      return { [csrfConfig.headerName]: token };
+    }
+  }
+  return {};
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const raw = document.cookie || "";
+  const parts = raw.split(";").map((c) => c.trim());
+  for (const part of parts) {
+    if (!part) continue;
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    const key = part.slice(0, idx).trim();
+    if (key !== name) continue;
+    return decodeURIComponent(part.slice(idx + 1));
+  }
+  return null;
+}
+
 export async function api<T>(
   path: string,
   options?: RequestInit & { json?: unknown },
@@ -16,6 +61,17 @@ export async function api<T>(
       ...(options?.headers ?? {}),
     },
   };
+
+  const method = (init.method || "GET").toUpperCase();
+  if (
+    csrfConfig.enabled &&
+    !["GET", "HEAD", "OPTIONS"].includes(method)
+  ) {
+    const token = readCookie(csrfConfig.cookieName);
+    if (token && typeof init.headers === "object") {
+      (init.headers as Record<string, string>)[csrfConfig.headerName] = token;
+    }
+  }
 
   if (options && "json" in options) {
     init.body = JSON.stringify(options.json ?? {});

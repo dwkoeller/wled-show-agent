@@ -115,3 +115,32 @@ async def test_db_service_global_kv_roundtrip(tmp_path) -> None:
     assert got is not None
     assert got["enabled"] is True
     assert got["mode"] == "looks"
+
+
+@pytest.mark.anyio
+async def test_db_service_event_logs_after_id(tmp_path) -> None:
+    db = DatabaseService(
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        agent_id="agent1",
+    )
+    await db.init()
+
+    id1 = await db.add_event_log(
+        event_type="jobs",
+        event="created",
+        payload={"event": "created", "job_id": "1"},
+    )
+    id2 = await db.add_event_log(
+        event_type="jobs",
+        event="updated",
+        payload={"event": "updated", "job_id": "1"},
+    )
+    assert id1 is not None
+    assert id2 is not None
+
+    rows = await db.list_event_logs_after_id(
+        last_id=int(id1), limit=10, agent_id="agent1"
+    )
+    assert len(rows) == 1
+    assert rows[0]["id"] == id2
+    assert rows[0]["event_type"] == "jobs"

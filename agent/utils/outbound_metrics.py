@@ -92,6 +92,47 @@ class OutboundPrometheusMetrics:
         for k in sorted(d.keys()):
             yield k, d[k]
 
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            failures = dict(self._failures_total)
+            dur_sum = dict(self._request_duration_sum_s)
+            dur_count = dict(self._request_duration_count)
+            retries = dict(self._retries_total)
+
+        total_failures = sum(int(v) for v in failures.values())
+        total_retries = sum(int(v) for v in retries.values())
+        by_kind: Dict[str, Dict[str, float | int]] = {}
+
+        for (target_kind, _target, _method, _reason), count in failures.items():
+            k = str(target_kind)
+            slot = by_kind.setdefault(k, {"failures": 0, "retries": 0, "avg_latency_s": 0.0})
+            slot["failures"] = int(slot.get("failures", 0)) + int(count)
+
+        for (target_kind, _target, _method), count in retries.items():
+            k = str(target_kind)
+            slot = by_kind.setdefault(k, {"failures": 0, "retries": 0, "avg_latency_s": 0.0})
+            slot["retries"] = int(slot.get("retries", 0)) + int(count)
+
+        latency_by_kind: Dict[str, float] = {}
+        counts_by_kind: Dict[str, int] = {}
+        for (target_kind, _target, _method), count in dur_count.items():
+            k = str(target_kind)
+            counts_by_kind[k] = counts_by_kind.get(k, 0) + int(count)
+        for (target_kind, _target, _method), total in dur_sum.items():
+            k = str(target_kind)
+            latency_by_kind[k] = latency_by_kind.get(k, 0.0) + float(total)
+        for k in set(list(counts_by_kind.keys()) + list(latency_by_kind.keys())):
+            denom = float(counts_by_kind.get(k, 0) or 0)
+            avg = float(latency_by_kind.get(k, 0.0)) / denom if denom > 0 else 0.0
+            slot = by_kind.setdefault(k, {"failures": 0, "retries": 0, "avg_latency_s": 0.0})
+            slot["avg_latency_s"] = float(avg)
+
+        return {
+            "failures_total": int(total_failures),
+            "retries_total": int(total_retries),
+            "by_target_kind": by_kind,
+        }
+
     def render(self) -> str:
         with self._lock:
             failures = dict(self._failures_total)

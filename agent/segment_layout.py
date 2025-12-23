@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
-from wled_client import WLEDClient
+from wled_client import AsyncWLEDClient
 
 
 @dataclass(frozen=True)
@@ -92,18 +92,17 @@ def _fallback_equal_layout(led_count: int, segment_ids: Sequence[int]) -> Segmen
     )
 
 
-def fetch_segment_layout(
-    wled: WLEDClient,
+async def fetch_segment_layout_async(
+    wled: AsyncWLEDClient,
     *,
     segment_ids: Optional[Sequence[int]] = None,
     refresh: bool = True,
 ) -> SegmentLayout:
     """Best-effort: fetch segment bounds from WLED /json/state; fall back to equal partitions."""
 
-    # LED count
     led_count = 0
     try:
-        led_count = int(wled.device_info().led_count)
+        led_count = int((await wled.device_info()).led_count)
     except Exception:
         led_count = 0
 
@@ -112,7 +111,7 @@ def fetch_segment_layout(
 
     segs_raw: List[Dict[str, object]] = []
     try:
-        segs = wled.get_segments(refresh=refresh)
+        segs = await wled.get_segments(refresh=refresh)
         for s in segs:
             if isinstance(s, dict):
                 segs_raw.append(s)
@@ -147,7 +146,6 @@ def fetch_segment_layout(
 
     parsed.sort(key=lambda r: (r.start, r.id))
 
-    # infer layout kind (mostly for debugging / UI)
     kind = "unknown"
     if len(parsed) == 4:
         lengths = [s.length for s in parsed]

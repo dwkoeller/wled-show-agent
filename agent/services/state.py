@@ -23,7 +23,6 @@ class AppState:
 
     # WLED clients/services.
     wled: Any = None  # AsyncWLEDClient
-    wled_sync: Any = None  # AsyncWLEDClientSyncAdapter (thread use)
     wled_mapper: Any = None  # WLEDMapper
 
     # Domain services.
@@ -32,6 +31,8 @@ class AppState:
     ddp: Any = None  # DDPStreamer
     sequences: Any = None  # SequenceService
     fleet_sequences: Any = None  # FleetSequenceService
+    orchestrator: Any = None  # OrchestrationService
+    fleet_orchestrator: Any = None  # FleetOrchestrationService
     director: Any = None  # Optional OpenAI director
 
     # Runtime state snapshot settings.
@@ -42,12 +43,21 @@ class AppState:
     db: Any = None
 
     # Runtime services (populated by startup).
-    jobs: Any = None  # JobManager-like
+    jobs: Any = None  # AsyncJobManager
     scheduler: Any = None  # SchedulerService-like
     peers: dict[str, Any] | None = None
+    blocking: Any = None  # BlockingService
+    ddp_blocking: Any = None  # BlockingService
+    cpu_pool: Any = None  # ProcessService
 
     # Shared async HTTP client for peer fanout.
     peer_http: Optional[httpx.AsyncClient] = None
+
+    # Optional MQTT bridge.
+    mqtt: Any = None
+
+    # Server-sent events (UI refresh).
+    events: Any = None
 
     # Main event loop (used for sync<->async bridges).
     loop: Optional[asyncio.AbstractEventLoop] = None
@@ -57,6 +67,26 @@ class AppState:
 
     # Back-compat: legacy single maintenance task.
     maintenance_task: Any = None
+
+    # Reconcile control (for status/cancel).
+    reconcile_task: Any = None
+    reconcile_cancel_event: asyncio.Event | None = None
+    reconcile_run_id: int | None = None
+
+    # Metrics retention bookkeeping.
+    metrics_history_retention_last: dict[str, Any] | None = None
+    audit_log_retention_last: dict[str, Any] | None = None
+    event_log_retention_last: dict[str, Any] | None = None
+    job_retention_last: dict[str, Any] | None = None
+    scheduler_events_retention_last: dict[str, Any] | None = None
+    pack_ingests_retention_last: dict[str, Any] | None = None
+    sequence_meta_retention_last: dict[str, Any] | None = None
+    audio_analyses_retention_last: dict[str, Any] | None = None
+    show_configs_retention_last: dict[str, Any] | None = None
+    fseq_exports_retention_last: dict[str, Any] | None = None
+    fpp_scripts_retention_last: dict[str, Any] | None = None
+    orchestration_runs_retention_last: dict[str, Any] | None = None
+    agent_history_retention_last: dict[str, Any] | None = None
 
     def uptime_s(self) -> float:
         return max(0.0, time.time() - float(self.started_at))

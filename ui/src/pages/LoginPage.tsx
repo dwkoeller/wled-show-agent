@@ -20,7 +20,10 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const needsTotp = useMemo(() => Boolean(config?.totp_enabled), [config]);
+  const needsTotp = useMemo(
+    () => (config ? Boolean(config.totp_enabled) : true),
+    [config],
+  );
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +84,8 @@ export function LoginPage() {
             Sign in
           </Button>
           <Typography variant="body2" color="text.secondary">
-            Auth uses an HttpOnly JWT cookie. Keep this service on your LAN.
+            Auth uses an HttpOnly JWT cookie. Use HTTPS and set
+            AUTH_COOKIE_SECURE=true for internet-facing deployments.
           </Typography>
         </Box>
       </Box>

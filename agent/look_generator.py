@@ -46,20 +46,33 @@ class LookLibraryGenerator:
     Those names are mapped to numeric IDs at apply/import time.
     """
 
-    def __init__(self, *, mapper: WLEDMapper, seed: int = 1337) -> None:
+    def __init__(
+        self,
+        *,
+        mapper: WLEDMapper,
+        seed: int = 1337,
+        effects: Sequence[str] | None = None,
+        palettes: Sequence[str] | None = None,
+        segments: Sequence[Dict[str, Any]] | None = None,
+    ) -> None:
         self.mapper = mapper
         self.rng = random.Random(seed)
 
         # Snapshot current names (for selection)
-        self.effects = self._filtered_effects()
-        self.palettes = self._palettes()
+        self.effects = self._filtered_effects(effects)
+        self.palettes = self._palettes(palettes)
+        self._segments_state = list(segments) if segments is not None else None
 
         # Theme color banks
         self.colors: Dict[str, List[List[RGB]]] = self._build_color_banks()
 
-    def _filtered_effects(self) -> List[str]:
+    def _filtered_effects(self, effects: Sequence[str] | None) -> List[str]:
         # Use mapper maps() to filter reserved; but we want the names too.
-        eff = self.mapper.wled.get_effects(refresh=True)
+        eff = (
+            list(effects)
+            if effects is not None
+            else self.mapper.wled.get_effects(refresh=True)
+        )
         out: List[str] = []
         for e in eff:
             n = str(e).strip()
@@ -70,8 +83,12 @@ class LookLibraryGenerator:
             out.append(n)
         return out
 
-    def _palettes(self) -> List[str]:
-        pal = self.mapper.wled.get_palettes(refresh=True)
+    def _palettes(self, palettes: Sequence[str] | None) -> List[str]:
+        pal = (
+            list(palettes)
+            if palettes is not None
+            else self.mapper.wled.get_palettes(refresh=True)
+        )
         return [str(p).strip() for p in pal if str(p).strip()]
 
     def _build_color_banks(self) -> Dict[str, List[List[RGB]]]:
@@ -400,7 +417,11 @@ class LookLibraryGenerator:
                     ordered_seg_ids = list(seg_ids)
                     seg_len_by_id: Dict[int, int] = {}
                     try:
-                        seg_state = self.mapper.wled.get_segments(refresh=False)
+                        seg_state = (
+                            self._segments_state
+                            if self._segments_state is not None
+                            else self.mapper.wled.get_segments(refresh=False)
+                        )
                         seg_map = {}
                         for s in seg_state:
                             if not isinstance(s, dict):

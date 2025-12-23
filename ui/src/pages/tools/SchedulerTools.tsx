@@ -3,6 +3,7 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import StopIcon from "@mui/icons-material/Stop";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import BoltIcon from "@mui/icons-material/Bolt";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import {
   Alert,
   Button,
@@ -21,6 +22,9 @@ import {
 } from "@mui/material";
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
+import { useAuth } from "../../auth";
+import { TargetPreviewDialog } from "../../components/TargetPreviewDialog";
+import { useEventRefresh } from "../../hooks/useEventRefresh";
 
 type SchedulerStatus = {
   ok: boolean;
@@ -54,6 +58,39 @@ type SchedulerEvent = {
   error: string | null;
 };
 
+type SchedulerEventsRes = {
+  ok: boolean;
+  events: SchedulerEvent[];
+  count?: number;
+  limit?: number;
+  offset?: number;
+  next_offset?: number | null;
+};
+
+type RetentionRes = {
+  ok?: boolean;
+  stats?: { count?: number; oldest?: number | null; newest?: number | null };
+  settings?: {
+    max_rows?: number;
+    max_days?: number;
+    maintenance_interval_s?: number;
+  };
+  drift?: {
+    excess_rows?: number;
+    excess_age_s?: number;
+    oldest_age_s?: number | null;
+    drift?: boolean;
+  };
+  last_retention?: { at?: number; result?: Record<string, unknown> } | null;
+};
+
+type PageMeta = {
+  count?: number;
+  limit?: number;
+  offset?: number;
+  next_offset?: number | null;
+};
+
 function parseTargets(raw: string): string[] | null {
   const out = raw
     .split(",")
@@ -71,11 +108,27 @@ function fmtTs(ts: number | null): string {
   }
 }
 
+function toEpochSeconds(value: string): string | null {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return null;
+  return String(Math.floor(ts / 1000));
+}
+
 export function SchedulerTools() {
+  const { user } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<SchedulerStatus | null>(null);
   const [events, setEvents] = useState<SchedulerEvent[]>([]);
+  const [eventsMeta, setEventsMeta] = useState<PageMeta | null>(null);
+  const [retention, setRetention] = useState<RetentionRes | null>(null);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [retentionBusy, setRetentionBusy] = useState(false);
+  const [retentionOverrideRows, setRetentionOverrideRows] = useState("");
+  const [retentionOverrideDays, setRetentionOverrideDays] = useState("");
+  const [retentionResult, setRetentionResult] =
+    useState<Record<string, unknown> | null>(null);
 
   const [sequences, setSequences] = useState<string[]>([]);
 
@@ -96,6 +149,15 @@ export function SchedulerTools() {
   const [sequenceLoop, setSequenceLoop] = useState(true);
   const [stopAllOnEnd, setStopAllOnEnd] = useState(true);
 
+  const [eventsLimit, setEventsLimit] = useState("20");
+  const [eventsOffset, setEventsOffset] = useState("0");
+  const [eventsAgentFilter, setEventsAgentFilter] = useState("");
+  const [eventsSinceFilter, setEventsSinceFilter] = useState("");
+  const [eventsUntilFilter, setEventsUntilFilter] = useState("");
+
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTargets, setPreviewTargets] = useState<string[] | null>(null);
+
   const nextActionHint = useMemo(() => {
     const s = status?.next_action_in_s;
     if (s == null) return null;
@@ -103,8 +165,61 @@ export function SchedulerTools() {
     if (s < 60) return `Next action in ${Math.round(s)}s`;
     return `Next action in ${Math.round(s / 60)}m`;
   }, [status?.next_action_in_s]);
+  const retentionDrift = retention?.drift?.drift;
+  const isAdmin = (user?.role || "") === "admin";
 
-  const refresh = async () => {
+  const buildEventsQuery = (lim: number, off: number) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(lim));
+    if (off > 0) q.set("offset", String(off));
+    if (eventsAgentFilter.trim()) q.set("agent_id", eventsAgentFilter.trim());
+    const since = toEpochSeconds(eventsSinceFilter);
+    const until = toEpochSeconds(eventsUntilFilter);
+    if (since) q.set("since", since);
+    if (until) q.set("until", until);
+    return q;
+  };
+
+  const fetchRetention = async () => {
+    setRetentionError(null);
+    try {
+      const res = await api<RetentionRes>("/v1/scheduler/retention", {
+        method: "GET",
+      });
+      setRetention(res);
+    } catch (e) {
+      setRetentionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const runRetention = async () => {
+    setRetentionBusy(true);
+    setRetentionError(null);
+    setRetentionResult(null);
+    try {
+      const params = new URLSearchParams();
+      const rows = parseInt(retentionOverrideRows || "", 10);
+      if (Number.isFinite(rows) && rows > 0) params.set("max_rows", String(rows));
+      const days = parseInt(retentionOverrideDays || "", 10);
+      if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
+      const url =
+        params.toString().length > 0
+          ? `/v1/scheduler/retention?${params.toString()}`
+          : "/v1/scheduler/retention";
+      const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
+        url,
+        { method: "POST", json: {} },
+      );
+      setRetentionResult(res.result ?? null);
+      await fetchRetention();
+    } catch (e) {
+      setRetentionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRetentionBusy(false);
+    }
+  };
+
+  const refresh = async (opts?: { eventsOffset?: number }) => {
     setError(null);
     setBusy(true);
     try {
@@ -113,13 +228,24 @@ export function SchedulerTools() {
       });
       setStatus(st);
       try {
-        const ev = await api<{ ok: boolean; events: SchedulerEvent[] }>(
-          "/v1/scheduler/events?limit=20",
+        const lim = parseInt(eventsLimit || "20", 10) || 20;
+        const off = opts?.eventsOffset ?? (parseInt(eventsOffset || "0", 10) || 0);
+        if (opts?.eventsOffset != null) setEventsOffset(String(off));
+        const q = buildEventsQuery(lim, off);
+        const ev = await api<SchedulerEventsRes>(
+          `/v1/scheduler/events?${q.toString()}`,
           { method: "GET" },
         );
         setEvents(ev.events || []);
+        setEventsMeta({
+          count: ev.count ?? ev.events?.length ?? 0,
+          limit: ev.limit ?? lim,
+          offset: ev.offset ?? off,
+          next_offset: ev.next_offset ?? null,
+        });
       } catch {
         setEvents([]);
+        setEventsMeta(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -145,7 +271,14 @@ export function SchedulerTools() {
   useEffect(() => {
     void refresh();
     void refreshSequences();
+    void fetchRetention();
   }, []);
+
+  useEventRefresh({
+    types: ["scheduler", "sequences", "tick"],
+    refresh,
+    minIntervalMs: 3000,
+  });
 
   useEffect(() => {
     if (!status) return;
@@ -238,6 +371,58 @@ export function SchedulerTools() {
     }
   };
 
+  const downloadExport = async (url: string, filename: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const resp = await fetch(url, { credentials: "include" });
+      if (!resp.ok) {
+        const contentType = resp.headers.get("content-type") ?? "";
+        if (contentType.includes("application/json")) {
+          const data = (await resp.json()) as { detail?: string; error?: string };
+          throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+        }
+        const text = await resp.text();
+        throw new Error(text || `HTTP ${resp.status}`);
+      }
+      const blob = await resp.blob();
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportEvents = async (format: "csv" | "json") => {
+    const lim = Math.min(parseInt(eventsLimit || "20", 10) || 20, 20000);
+    const off = parseInt(eventsOffset || "0", 10) || 0;
+    const q = buildEventsQuery(lim, off);
+    q.set("format", format);
+    const filename =
+      format === "json" ? "scheduler_events.json" : "scheduler_events.csv";
+    await downloadExport(`/v1/scheduler/events/export?${q.toString()}`, filename);
+  };
+
+  const pageEvents = async (dir: "prev" | "next") => {
+    const limitVal = eventsMeta?.limit ?? (parseInt(eventsLimit || "20", 10) || 20);
+    const current =
+      eventsMeta?.offset ?? (parseInt(eventsOffset || "0", 10) || 0);
+    const next =
+      dir === "next"
+        ? eventsMeta?.next_offset ?? null
+        : Math.max(0, current - limitVal);
+    if (next == null) return;
+    await refresh({ eventsOffset: next });
+  };
+
   return (
     <Stack spacing={2}>
       {error ? <Alert severity="error">{error}</Alert> : null}
@@ -247,8 +432,7 @@ export function SchedulerTools() {
           <Typography variant="h6">Scheduler Status</Typography>
           <Typography variant="body2" color="text.secondary">
             Basic show-window automation. Config is stored under{" "}
-            <code>DATABASE_URL</code> (shared fleet config) and mirrored to{" "}
-            <code>DATA_DIR/show/scheduler.json</code>.
+            <code>DATABASE_URL</code> (shared fleet config).
           </Typography>
           {status ? (
             <Stack spacing={1} sx={{ mt: 2 }}>
@@ -286,7 +470,11 @@ export function SchedulerTools() {
           )}
         </CardContent>
         <CardActions>
-          <Button startIcon={<RefreshIcon />} onClick={refresh} disabled={busy}>
+          <Button
+            startIcon={<RefreshIcon />}
+            onClick={() => void refresh()}
+            disabled={busy}
+          >
             Refresh
           </Button>
           <Button
@@ -314,6 +502,52 @@ export function SchedulerTools() {
       <Card>
         <CardContent>
           <Typography variant="h6">Recent events</Typography>
+          <Stack spacing={1} sx={{ mt: 2 }}>
+            <TextField
+              label="Limit"
+              value={eventsLimit}
+              onChange={(e) => setEventsLimit(e.target.value)}
+              disabled={busy}
+              inputMode="numeric"
+            />
+            <TextField
+              label="Offset"
+              value={eventsOffset}
+              onChange={(e) => setEventsOffset(e.target.value)}
+              disabled={busy}
+              inputMode="numeric"
+            />
+            <TextField
+              label="Agent filter"
+              value={eventsAgentFilter}
+              onChange={(e) => setEventsAgentFilter(e.target.value)}
+              disabled={busy}
+              placeholder="agent-1"
+            />
+            <TextField
+              label="Since"
+              type="datetime-local"
+              value={eventsSinceFilter}
+              onChange={(e) => setEventsSinceFilter(e.target.value)}
+              disabled={busy}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              label="Until"
+              type="datetime-local"
+              value={eventsUntilFilter}
+              onChange={(e) => setEventsUntilFilter(e.target.value)}
+              disabled={busy}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Stack>
+          {eventsMeta ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              Showing <code>{eventsMeta.count ?? events.length}</code> · offset=
+              <code>{eventsMeta.offset ?? 0}</code> · limit=
+              <code>{eventsMeta.limit ?? eventsLimit}</code>
+            </Typography>
+          ) : null}
           {events.length === 0 ? (
             <Typography variant="body2" sx={{ mt: 1 }} color="text.secondary">
               No scheduler events yet.
@@ -340,8 +574,114 @@ export function SchedulerTools() {
           )}
         </CardContent>
         <CardActions>
-          <Button startIcon={<RefreshIcon />} onClick={refresh} disabled={busy}>
+          <Button
+            startIcon={<RefreshIcon />}
+            onClick={() => void refresh()}
+            disabled={busy}
+          >
             Refresh
+          </Button>
+          <Button
+            onClick={() => void pageEvents("prev")}
+            disabled={busy || (eventsMeta?.offset ?? 0) <= 0}
+          >
+            Prev
+          </Button>
+          <Button
+            onClick={() => void pageEvents("next")}
+            disabled={busy || eventsMeta?.next_offset == null}
+          >
+            Next
+          </Button>
+          <Button onClick={() => void exportEvents("csv")} disabled={busy}>
+            Export CSV
+          </Button>
+          <Button onClick={() => void exportEvents("json")} disabled={busy}>
+            Export JSON
+          </Button>
+        </CardActions>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Typography variant="h6">Scheduler Retention</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Retention status for <code>scheduler_events</code>.
+          </Typography>
+          {retentionDrift ? (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Scheduler events exceed retention targets. Run cleanup or adjust{" "}
+              <code>SCHEDULER_EVENTS_MAX_ROWS</code>/<code>SCHEDULER_EVENTS_MAX_DAYS</code>.
+            </Alert>
+          ) : null}
+          {retentionError ? (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              {retentionError}
+            </Alert>
+          ) : null}
+          {retentionResult ? (
+            <Alert severity="success" sx={{ mt: 2 }}>
+              Cleanup complete:{" "}
+              <code>
+                rows {String(retentionResult.deleted_by_rows ?? 0)} · days{" "}
+                {String(retentionResult.deleted_by_days ?? 0)}
+              </code>
+            </Alert>
+          ) : null}
+          <Stack spacing={1} sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              Count: <code>{retention?.stats?.count ?? 0}</code> · Oldest{" "}
+              <code>{fmtTs(retention?.stats?.oldest ?? null)}</code> · Newest{" "}
+              <code>{fmtTs(retention?.stats?.newest ?? null)}</code>
+            </Typography>
+            <Typography variant="body2">
+              Max rows: <code>{retention?.settings?.max_rows ?? 0}</code> · Max days{" "}
+              <code>{retention?.settings?.max_days ?? 0}</code>
+            </Typography>
+            <Typography variant="body2">
+              Drift: rows <code>{retention?.drift?.excess_rows ?? 0}</code> · age{" "}
+              <code>
+                {retention?.drift?.excess_age_s
+                  ? `${Math.round(retention.drift.excess_age_s)}s`
+                  : "0s"}
+              </code>
+            </Typography>
+            <TextField
+              label="Override max rows"
+              value={retentionOverrideRows}
+              onChange={(e) => setRetentionOverrideRows(e.target.value)}
+              helperText="Optional override for manual cleanup."
+              disabled={!isAdmin || retentionBusy}
+              inputMode="numeric"
+            />
+            <TextField
+              label="Override max days"
+              value={retentionOverrideDays}
+              onChange={(e) => setRetentionOverrideDays(e.target.value)}
+              helperText="Optional override for manual cleanup."
+              disabled={!isAdmin || retentionBusy}
+              inputMode="numeric"
+            />
+            <Typography variant="body2" color="text.secondary">
+              Last cleanup:{" "}
+              <code>
+                {retention?.last_retention?.at
+                  ? fmtTs(retention.last_retention.at)
+                  : "—"}
+              </code>
+            </Typography>
+          </Stack>
+        </CardContent>
+        <CardActions>
+          <Button onClick={() => void fetchRetention()} disabled={retentionBusy}>
+            Refresh retention
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => void runRetention()}
+            disabled={!isAdmin || retentionBusy}
+          >
+            Run cleanup
           </Button>
         </CardActions>
       </Card>
@@ -439,13 +779,26 @@ export function SchedulerTools() {
             />
 
             {scope === "fleet" ? (
-              <TextField
-                label="Targets (optional, comma-separated peer names)"
-                value={targets}
-                onChange={(e) => setTargets(e.target.value)}
-                disabled={busy}
-                helperText="Leave blank to target all configured peers."
-              />
+              <Stack spacing={1}>
+                <TextField
+                  label="Targets (optional, comma-separated)"
+                  value={targets}
+                  onChange={(e) => setTargets(e.target.value)}
+                  disabled={busy}
+                  helperText='Examples: "roofline1", "role:roofline", "tag:outside", "*" (all online discovered). Leave blank = all configured peers.'
+                />
+                <Button
+                  variant="outlined"
+                  startIcon={<VisibilityIcon />}
+                  onClick={() => {
+                    setPreviewTargets(parseTargets(targets));
+                    setPreviewOpen(true);
+                  }}
+                  disabled={busy}
+                >
+                  Preview targets
+                </Button>
+              </Stack>
             ) : null}
 
             {mode === "looks" ? (
@@ -520,6 +873,13 @@ export function SchedulerTools() {
           </Button>
         </CardActions>
       </Card>
+
+      <TargetPreviewDialog
+        open={previewOpen}
+        title="Scheduler targets"
+        targets={previewTargets}
+        onClose={() => setPreviewOpen(false)}
+      />
     </Stack>
   );
 }

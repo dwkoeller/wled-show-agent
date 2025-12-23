@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from look_generator import look_to_wled_state
-from pack_io import read_jsonl
-from rate_limiter import Cooldown
-from wled_client import WLEDClient
+from pack_io import read_jsonl_async
+from rate_limiter import AsyncCooldown
+from wled_client import AsyncWLEDClient
 from wled_mapper import WLEDMapper
 
 
@@ -22,9 +22,9 @@ class PresetImporter:
     def __init__(
         self,
         *,
-        wled: WLEDClient,
+        wled: AsyncWLEDClient,
         mapper: WLEDMapper,
-        cooldown: Cooldown,
+        cooldown: AsyncCooldown,
         max_bri: int,
         segment_ids: list[int] | None = None,
         replicate_to_all_segments: bool = True,
@@ -36,7 +36,7 @@ class PresetImporter:
         self.segment_ids = list(segment_ids) if segment_ids else []
         self.replicate_to_all_segments = bool(replicate_to_all_segments)
 
-    def import_from_pack(
+    async def import_from_pack(
         self,
         *,
         pack_path: str,
@@ -46,7 +46,7 @@ class PresetImporter:
         include_brightness: bool = True,
         save_bounds: bool = True,
     ) -> ImportResult:
-        rows = read_jsonl(pack_path, limit=limit)
+        rows = await read_jsonl_async(pack_path, limit=limit)
         errors: List[str] = []
         imported = 0
         cur_id = int(start_id)
@@ -82,8 +82,8 @@ class PresetImporter:
                         "sb": bool(save_bounds),
                     }
                 )
-                self.cooldown.wait()
-                self.wled.apply_state(payload, verbose=False)
+                await self.cooldown.wait()
+                await self.wled.apply_state(payload, verbose=False)
                 imported += 1
                 cur_id += 1
                 if cur_id > 250:

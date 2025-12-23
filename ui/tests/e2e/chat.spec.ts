@@ -11,6 +11,7 @@ test("can send a chat command (stubbed)", async ({ page }) => {
         totp_enabled: false,
         openai_enabled: true,
         fpp_enabled: false,
+        mqtt_enabled: false,
         peers_configured: 0,
       },
     });
@@ -28,8 +29,17 @@ test("can send a chat command (stubbed)", async ({ page }) => {
   await page.goto("chat");
   await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
 
-  await page.getByLabel("Command").fill("stop all");
+  await page.getByRole("textbox", { name: "Command" }).fill("stop all");
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText(/echo:stop all/)).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Voice mode" }).click();
+  await page.getByRole("option", { name: "Server transcription" }).click();
+  await expect(page.getByLabel("STT language")).toBeVisible();
+  await expect(page.getByLabel("STT prompt")).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Voice mode" }).click();
+  await page.getByRole("option", { name: "Server intent (run)" }).click();
+  await expect(page.getByLabel("Auto-run voice commands")).toBeDisabled();
 });

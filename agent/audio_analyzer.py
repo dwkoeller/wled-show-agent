@@ -114,6 +114,68 @@ def _read_wav_mono_s16(path: str) -> Tuple[int, array]:
     return sr, mono
 
 
+def extract_waveform(
+    *,
+    audio_path: str,
+    points: int = 512,
+    sample_rate_hz: int = 44100,
+    prefer_ffmpeg: bool = True,
+) -> Dict[str, object]:
+    """
+    Downsample a waveform into min/max buckets for visualization.
+    """
+    path = str(audio_path)
+    tmp: str | None = None
+    try:
+        if not path.lower().endswith(".wav"):
+            if not prefer_ffmpeg:
+                raise AudioAnalyzeError(
+                    "Non-WAV files require ffmpeg (set prefer_ffmpeg=true)."
+                )
+            tmp = _decode_to_wav_pcm(in_path=path, sample_rate_hz=int(sample_rate_hz))
+            path = tmp
+
+        sr, samples = _read_wav_mono_s16(path)
+        total = len(samples)
+        if total <= 0:
+            raise AudioAnalyzeError("Audio file has no samples")
+
+        points_i = max(32, min(5000, int(points)))
+        step = max(1, total // points_i)
+        scale = 32768.0
+        buckets: List[Dict[str, float]] = []
+
+        for i in range(points_i):
+            start = i * step
+            end = total if i == points_i - 1 else min(total, start + step)
+            if end <= start:
+                buckets.append({"min": 0.0, "max": 0.0})
+                continue
+            min_v = 1.0
+            max_v = -1.0
+            for j in range(start, end):
+                v = float(samples[j]) / scale
+                if v < min_v:
+                    min_v = v
+                if v > max_v:
+                    max_v = v
+            buckets.append({"min": float(min_v), "max": float(max_v)})
+
+        duration_s = float(total) / float(sr) if sr > 0 else 0.0
+        return {
+            "duration_s": duration_s,
+            "sample_rate_hz": int(sr),
+            "points": buckets,
+            "points_total": len(buckets),
+        }
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+
 def analyze_beats(
     *,
     audio_path: str,

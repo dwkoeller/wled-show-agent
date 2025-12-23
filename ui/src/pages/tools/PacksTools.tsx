@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import React, { useMemo, useState } from "react";
+import { csrfHeaders } from "../../api";
 
 type IngestResult = {
   ok?: boolean;
@@ -59,7 +60,10 @@ export function PacksTools() {
       const resp = await fetch(url.toString(), {
         method: "PUT",
         credentials: "include",
-        headers: { "Content-Type": zipFile.type || "application/zip" },
+        headers: {
+          ...csrfHeaders("PUT"),
+          "Content-Type": zipFile.type || "application/zip",
+        },
         body: zipFile,
       });
 

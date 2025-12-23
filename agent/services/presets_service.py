@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any, Dict
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from models.requests import ImportPresetsRequest
+from services.audit_logger import log_event
 from services.auth_service import require_a2a_auth
 from services.state import AppState, get_state
 
@@ -20,14 +20,14 @@ def _require_importer(state: AppState):
 
 async def presets_import(
     req: ImportPresetsRequest,
+    request: Request,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
     try:
         imp = _require_importer(state)
         pack_path = os.path.join(state.settings.data_dir, "looks", req.pack_file)
-        res = await asyncio.to_thread(
-            imp.import_from_pack,
+        res = await imp.import_from_pack(
             pack_path=pack_path,
             start_id=req.start_id,
             limit=req.limit,
@@ -35,8 +35,28 @@ async def presets_import(
             include_brightness=req.include_brightness,
             save_bounds=req.save_bounds,
         )
+        await log_event(
+            state,
+            action="presets.import",
+            ok=True,
+            resource=str(req.pack_file),
+            payload={
+                "start_id": req.start_id,
+                "limit": req.limit,
+                "name_prefix": req.name_prefix,
+            },
+            request=request,
+        )
         return {"ok": True, "result": res.__dict__}
     except HTTPException:
         raise
     except Exception as e:
+        await log_event(
+            state,
+            action="presets.import",
+            ok=False,
+            resource=str(req.pack_file),
+            error=str(e),
+            request=request,
+        )
         raise HTTPException(status_code=400, detail=str(e))

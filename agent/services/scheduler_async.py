@@ -2,22 +2,52 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from aiofiles import os as aio_os
 from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 from models.requests import FleetApplyRandomLookRequest, FleetStopAllRequest
-from pack_io import read_json, write_json
+from pack_io import read_json_async, write_json_async
 from services import a2a_service, fleet_service
 from services.runtime_state_service import persist_runtime_state
-from services.scheduler_core import (
-    KV_SCHEDULER_CONFIG_KEY,
-    SchedulerConfig,
-    hhmm_to_minutes,
-)
 from services.state import AppState
+
+
+KV_SCHEDULER_CONFIG_KEY = "scheduler_config"
+
+
+class SchedulerConfig(BaseModel):
+    enabled: bool = True
+    autostart: bool = False
+    start_hhmm: str = Field(default="17:00")
+    end_hhmm: str = Field(default="23:00")
+    mode: str = Field(default="looks", pattern="^(looks|sequence)$")
+    scope: str = Field(default="fleet", pattern="^(local|fleet)$")
+    interval_s: int = Field(default=300, ge=10, le=24 * 60 * 60)
+    theme: Optional[str] = None
+    brightness: Optional[int] = Field(default=None, ge=1, le=255)
+    targets: Optional[list[str]] = None
+    include_self: bool = True
+    sequence_file: Optional[str] = None
+    sequence_loop: bool = True
+    stop_all_on_end: bool = True
+
+
+def hhmm_to_minutes(value: str) -> int:
+    s = (value or "").strip()
+    m = re.match(r"^(\\d{1,2}):(\\d{2})$", s)
+    if not m:
+        raise ValueError("Invalid HH:MM")
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+        raise ValueError("Invalid HH:MM")
+    return (hh * 60) + mm
 
 
 def _now_minutes_local() -> int:
@@ -92,6 +122,12 @@ class AsyncSchedulerService:
             self._config = SchedulerConfig(**cfg.model_dump())
         if persist:
             await self._save_config(cfg)
+        await self._emit_event(
+            {
+                "event": "config_set",
+                "config": cfg.model_dump(),
+            }
+        )
 
     async def start(self) -> None:
         async with self._lock:
@@ -101,6 +137,7 @@ class AsyncSchedulerService:
             self._stop.clear()
             self._running = True
             self._task = asyncio.create_task(self._run(), name="scheduler")
+        await self._emit_event({"event": "start"})
 
     async def stop(self) -> None:
         async with self._lock:
@@ -121,6 +158,7 @@ class AsyncSchedulerService:
             self._task = None
             self._running = False
             self._window_active = False
+        await self._emit_event({"event": "stop"})
 
     async def status(self) -> Dict[str, Any]:
         async with self._lock:
@@ -364,6 +402,15 @@ class AsyncSchedulerService:
                     )
                 except Exception:
                     pass
+            await self._emit_event(
+                {
+                    "event": "stop_all",
+                    "scope": str(cfg.scope),
+                    "reason": str(reason),
+                    "ok": bool(ok),
+                    "error": err,
+                }
+            )
 
     async def _execute_action(self, cfg: SchedulerConfig, *, reason: str) -> None:
         if cfg.mode == "looks":
@@ -419,6 +466,23 @@ class AsyncSchedulerService:
                                 "reason": reason,
                             },
                         )
+                        try:
+                            from services.events_service import emit_event
+
+                            await emit_event(
+                                self._state,
+                                event_type="meta",
+                                data={
+                                    "event": "last_applied",
+                                    "kind": "look",
+                                    "name": str(picked.get("name") or "") or None,
+                                    "file": str(pack_file) if pack_file else None,
+                                    "scope": "fleet",
+                                    "reason": str(reason),
+                                },
+                            )
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 async with self._lock:
@@ -452,12 +516,10 @@ class AsyncSchedulerService:
             looks = getattr(self._state, "looks", None)
             if looks is None:
                 raise RuntimeError("Look service not initialized")
-            pack_file, row = await asyncio.to_thread(
-                looks.choose_random, theme=cfg.theme
-            )
+            pack_file, row = await looks.choose_random(theme=cfg.theme)
             if self._state.wled_cooldown is not None:
                 await self._state.wled_cooldown.wait()
-            await asyncio.to_thread(looks.apply_look, row, brightness_override=bri)
+            await looks.apply_look(row, brightness_override=bri)
             await persist_runtime_state(
                 self._state,
                 "scheduler_apply_random_look",
@@ -477,6 +539,23 @@ class AsyncSchedulerService:
                             "reason": reason,
                         },
                     )
+                    try:
+                        from services.events_service import emit_event
+
+                        await emit_event(
+                            self._state,
+                            event_type="meta",
+                            data={
+                                "event": "last_applied",
+                                "kind": "look",
+                                "name": str(row.get("name") or "") or None,
+                                "file": str(pack_file) if pack_file else None,
+                                "scope": "local",
+                                "reason": str(reason),
+                            },
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -508,12 +587,30 @@ class AsyncSchedulerService:
                         )
                     except Exception:
                         pass
+            await self._emit_event(
+                {
+                    "event": "apply_random_look",
+                    "scope": str(cfg.scope),
+                    "reason": str(reason),
+                    "ok": bool(ok),
+                    "error": err,
+                }
+            )
 
     async def _ensure_sequence(self, cfg: SchedulerConfig, *, reason: str) -> None:
         file = (cfg.sequence_file or "").strip()
         if not file:
             async with self._lock:
                 self._last_error = "sequence_file is required for mode=sequence"
+            await self._emit_event(
+                {
+                    "event": "ensure_sequence",
+                    "scope": str(cfg.scope),
+                    "reason": str(reason),
+                    "ok": False,
+                    "error": "sequence_file is required for mode=sequence",
+                }
+            )
             return
 
         t0 = time.perf_counter()
@@ -523,14 +620,13 @@ class AsyncSchedulerService:
                 fleet = getattr(self._state, "fleet_sequences", None)
                 if fleet is None:
                     raise RuntimeError("Fleet sequence service not initialized")
-                st = await asyncio.to_thread(fleet.status)
+                st = await fleet.status()
                 if (
                     (not st.running)
                     or (st.file != file)
                     or (bool(st.loop) != bool(cfg.sequence_loop))
                 ):
-                    await asyncio.to_thread(
-                        fleet.start,
+                    await fleet.start(
                         file=file,
                         loop=bool(cfg.sequence_loop),
                         targets=cfg.targets,
@@ -546,15 +642,13 @@ class AsyncSchedulerService:
                 seq = getattr(self._state, "sequences", None)
                 if seq is None:
                     raise RuntimeError("Sequence service not initialized")
-                st = await asyncio.to_thread(seq.status)
+                st = await seq.status()
                 if (
                     (not st.running)
                     or (st.file != file)
                     or (bool(st.loop) != bool(cfg.sequence_loop))
                 ):
-                    await asyncio.to_thread(
-                        seq.play, file=file, loop=bool(cfg.sequence_loop)
-                    )
+                    await seq.play(file=file, loop=bool(cfg.sequence_loop))
                     started = True
                     await persist_runtime_state(
                         self._state,
@@ -577,6 +671,23 @@ class AsyncSchedulerService:
                             "reason": reason,
                         },
                     )
+                    try:
+                        from services.events_service import emit_event
+
+                        await emit_event(
+                            self._state,
+                            event_type="meta",
+                            data={
+                                "event": "last_applied",
+                                "kind": "sequence",
+                                "file": str(file),
+                                "loop": bool(cfg.sequence_loop),
+                                "scope": str(cfg.scope),
+                                "reason": str(reason),
+                            },
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -607,6 +718,17 @@ class AsyncSchedulerService:
                         )
                     except Exception:
                         pass
+            await self._emit_event(
+                {
+                    "event": "ensure_sequence",
+                    "scope": str(cfg.scope),
+                    "reason": str(reason),
+                    "ok": True,
+                    "started": bool(started),
+                    "file": file,
+                    "loop": bool(cfg.sequence_loop),
+                }
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -634,24 +756,37 @@ class AsyncSchedulerService:
                         )
                     except Exception:
                         pass
+            await self._emit_event(
+                {
+                    "event": "ensure_sequence",
+                    "scope": str(cfg.scope),
+                    "reason": str(reason),
+                    "ok": False,
+                    "error": str(e),
+                    "file": file,
+                    "loop": bool(cfg.sequence_loop),
+                }
+            )
 
     async def _load_config(self) -> SchedulerConfig:
         # DB KV first (if configured).
         db = getattr(self._state, "db", None)
-        if db is not None and self._kv_key:
-            try:
-                raw_db = await db.global_kv_get_json(self._kv_key)
-                if raw_db:
-                    return SchedulerConfig(**(raw_db or {}))
-            except Exception:
-                pass
+        if db is not None:
+            if self._kv_key:
+                try:
+                    raw_db = await db.global_kv_get_json(self._kv_key)
+                    if raw_db:
+                        return SchedulerConfig(**(raw_db or {}))
+                except Exception:
+                    pass
+            return SchedulerConfig()
 
         # File fallback.
         try:
             p = Path(self._config_path)
-            if not p.is_file():
+            if not await aio_os.path.isfile(str(p)):
                 return SchedulerConfig()
-            raw = await asyncio.to_thread(read_json, str(p))
+            raw = await read_json_async(str(p))
             cfg = SchedulerConfig(**(raw or {}))
             # Best-effort persist to DB KV.
             if db is not None and self._kv_key and bool(self._leader_eligible):
@@ -671,6 +806,15 @@ class AsyncSchedulerService:
                     await db.global_kv_set_json(self._kv_key, cfg.model_dump())
                 except Exception:
                     pass
-            await asyncio.to_thread(write_json, self._config_path, cfg.model_dump())
+            if db is None:
+                await write_json_async(self._config_path, cfg.model_dump())
+        except Exception:
+            return
+
+    async def _emit_event(self, payload: Dict[str, Any]) -> None:
+        try:
+            from services.events_service import emit_event
+
+            await emit_event(self._state, event_type="scheduler", data=payload)
         except Exception:
             return

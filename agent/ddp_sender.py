@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import struct
 import threading
@@ -88,3 +89,63 @@ class DDPSender:
             self._sock.sendto(
                 header + bytes(chunk), (self.cfg.host, int(self.cfg.port))
             )
+
+
+class DDPAsyncSender:
+    """
+    Async DDP sender using the event loop's UDP transport helpers.
+    """
+
+    def __init__(
+        self, cfg: DDPConfig, *, loop: Optional[asyncio.AbstractEventLoop] = None
+    ) -> None:
+        if not cfg.host:
+            raise ValueError("DDP host is required")
+        self.cfg = cfg
+        self._loop = loop or asyncio.get_running_loop()
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setblocking(False)
+        self._seq = 0
+        self._addr = (self.cfg.host, int(self.cfg.port))
+        self._max_data_len = max(1, int(cfg.max_pixels_per_packet)) * 3
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+    def _next_seq(self) -> int:
+        self._seq = (self._seq % 15) + 1
+        return self._seq
+
+    async def send_frame(self, rgb: bytes) -> None:
+        if not isinstance(rgb, (bytes, bytearray, memoryview)):
+            raise TypeError("rgb must be bytes-like")
+        data = memoryview(rgb)
+        total = len(data)
+        if total == 0:
+            return
+        seq = self._next_seq()
+
+        max_len = self._max_data_len
+        packets, rem = divmod(total, max_len)
+        if rem == 0:
+            packets -= 1
+
+        for i in range(packets + 1):
+            start = i * max_len
+            end = min(total, start + max_len)
+            chunk = data[start:end]
+            last = i == packets
+            flags = self.cfg.ver1_flag | (self.cfg.push_flag if last else 0)
+            header = struct.pack(
+                "!BBBBLH",
+                flags & 0xFF,
+                seq & 0xFF,
+                self.cfg.datatype_rgb & 0xFF,
+                self.cfg.destination_id & 0xFF,
+                start,
+                len(chunk) & 0xFFFF,
+            )
+            await self._loop.sock_sendto(self._sock, header + bytes(chunk), self._addr)

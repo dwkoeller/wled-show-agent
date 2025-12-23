@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from pack_io import read_json, write_json
+from pack_io import read_json, read_json_async, write_json, write_json_async
 
 
 class CoordinatorConfig(BaseModel):
@@ -121,6 +121,20 @@ def load_show_config(*, data_dir: str, rel_path: str) -> ShowConfig:
     return ShowConfig.model_validate(cfg)
 
 
+async def load_show_config_async(*, data_dir: str, rel_path: str) -> ShowConfig:
+    p = _ensure_within(data_dir, rel_path)
+    cfg = await read_json_async(str(p))
+    return ShowConfig.model_validate(cfg)
+
+
 def write_show_config(*, data_dir: str, rel_path: str, config: ShowConfig) -> str:
     p = _ensure_within(data_dir, rel_path)
     return write_json(str(p), config.as_dict())
+
+
+async def write_show_config_async(
+    *, data_dir: str, rel_path: str, config: ShowConfig
+) -> str:
+    p = _ensure_within(data_dir, rel_path)
+    await write_json_async(str(p), config.as_dict())
+    return str(p)

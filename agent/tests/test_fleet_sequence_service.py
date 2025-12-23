@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import time
+import asyncio
 from dataclasses import dataclass
+
+import pytest
 
 from fleet_sequence_service import FleetSequenceService
 from pack_io import write_json
@@ -13,7 +15,8 @@ class Peer:
     base_url: str = "http://peer:8088"
 
 
-def test_fleet_sequence_service_invokes_peers(tmp_path) -> None:
+@pytest.mark.anyio
+async def test_fleet_sequence_service_invokes_peers(tmp_path) -> None:
     data_dir = tmp_path
     seq_dir = data_dir / "sequences"
     seq_dir.mkdir(parents=True, exist_ok=True)
@@ -57,13 +60,13 @@ def test_fleet_sequence_service_invokes_peers(tmp_path) -> None:
         default_timeout_s=0.5,
     )
 
-    svc.start(file=seq_file, loop=False, include_self=True)
+    await svc.start(file=seq_file, loop=False, include_self=True)
     for _ in range(50):
-        if not svc.status().running:
+        if not (await svc.status()).running:
             break
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
 
-    assert svc.status().running is False
+    assert (await svc.status()).running is False
     assert any(c[0] == "roofline1" and c[1] == "start_ddp_pattern" for c in calls)
     assert any(c[0] == "roofline1" and c[1] == "apply_look_spec" for c in calls)
 

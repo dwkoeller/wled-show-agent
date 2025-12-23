@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-
-from wled_client import WLEDClient
+from typing import Any, Dict, List, Optional
 
 
 def _norm(s: str) -> str:
@@ -22,14 +20,12 @@ class WLEDMapper:
     Filters out reserved effects 'RSVD' and '-' as recommended.
     """
 
-    def __init__(self, wled: WLEDClient) -> None:
+    def __init__(self, wled: Any | None = None) -> None:
         self.wled = wled
         self._maps: Optional[WLEDNameMaps] = None
 
-    def refresh(self) -> WLEDNameMaps:
-        effects = self.wled.get_effects(refresh=True)
-        palettes = self.wled.get_palettes(refresh=True)
-
+    @staticmethod
+    def _build_maps(*, effects: List[str], palettes: List[str]) -> WLEDNameMaps:
         eff_map: Dict[str, int] = {}
         for idx, name in enumerate(effects):
             n = _norm(str(name))
@@ -44,7 +40,25 @@ class WLEDMapper:
             if n and n not in pal_map:
                 pal_map[n] = idx
 
-        self._maps = WLEDNameMaps(effect_name_to_id=eff_map, palette_name_to_id=pal_map)
+        return WLEDNameMaps(effect_name_to_id=eff_map, palette_name_to_id=pal_map)
+
+    def seed(self, *, effects: List[str], palettes: List[str]) -> WLEDNameMaps:
+        """
+        Seed the mapper with effect/palette name lists without doing network I/O.
+
+        Useful when running the app fully async (fetch names via AsyncWLEDClient, then seed).
+        """
+        self._maps = self._build_maps(effects=effects, palettes=palettes)
+        return self._maps
+
+    def refresh(self) -> WLEDNameMaps:
+        if self.wled is None:
+            raise RuntimeError("WLEDMapper has no WLED client; seed() first")
+        effects = self.wled.get_effects(refresh=True)
+        palettes = self.wled.get_palettes(refresh=True)
+        self._maps = self._build_maps(
+            effects=[str(x) for x in effects], palettes=[str(x) for x in palettes]
+        )
         return self._maps
 
     def maps(self) -> WLEDNameMaps:

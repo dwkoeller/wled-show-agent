@@ -147,3 +147,34 @@ async def request_with_retry(
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("request_with_retry failed without response or exception")
+
+
+def retry_policy_from_settings(settings: Any) -> RetryPolicy:
+    """
+    Build a RetryPolicy from settings with safe defaults.
+    """
+    try:
+        attempts = int(getattr(settings, "outbound_retry_attempts", 2))
+    except Exception:
+        attempts = 2
+    try:
+        backoff_base_s = float(getattr(settings, "outbound_retry_backoff_base_s", 0.15))
+    except Exception:
+        backoff_base_s = 0.15
+    try:
+        backoff_max_s = float(getattr(settings, "outbound_retry_backoff_max_s", 1.0))
+    except Exception:
+        backoff_max_s = 1.0
+    try:
+        raw_codes = getattr(settings, "outbound_retry_status_codes", None)
+        codes = tuple(int(x) for x in (raw_codes or ())) if raw_codes else ()
+    except Exception:
+        codes = ()
+    if not codes:
+        codes = (408, 425, 429, 500, 502, 503, 504)
+    return RetryPolicy(
+        attempts=max(1, int(attempts)),
+        backoff_base_s=max(0.0, float(backoff_base_s)),
+        backoff_max_s=max(0.0, float(backoff_max_s)),
+        retry_status_codes=tuple(codes),
+    )

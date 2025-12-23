@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException
 from models.requests import ApplyStateRequest
 from services.state import AppState, get_state
 from wled_client import AsyncWLEDClient, WLEDError
+from utils.outbound_http import retry_policy_from_settings
 
 
 def _segment_ids(state: AppState) -> List[int]:
@@ -25,6 +26,7 @@ def _client(state: AppState) -> AsyncWLEDClient:
         state.settings.wled_tree_url,
         client=http,
         timeout_s=float(state.settings.wled_http_timeout_s),
+        retry=retry_policy_from_settings(state.settings),
     )
 
 
@@ -54,6 +56,30 @@ async def wled_segments(state: AppState = Depends(get_state)) -> Dict[str, Any]:
     try:
         segs = await _client(state).get_segments(refresh=True)
         return {"ok": True, "segment_ids": _segment_ids(state), "segments": segs}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+async def wled_presets(state: AppState = Depends(get_state)) -> Dict[str, Any]:
+    try:
+        presets = await _client(state).get_presets_json(refresh=True)
+        return {"ok": True, "presets": presets}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+async def wled_effects(state: AppState = Depends(get_state)) -> Dict[str, Any]:
+    try:
+        effects = await _client(state).get_effects(refresh=True)
+        return {"ok": True, "effects": list(effects)}
+    except WLEDError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+async def wled_palettes(state: AppState = Depends(get_state)) -> Dict[str, Any]:
+    try:
+        palettes = await _client(state).get_palettes(refresh=True)
+        return {"ok": True, "palettes": list(palettes)}
     except WLEDError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

@@ -1,7 +1,6 @@
 fastapi==0.124.4
 uvicorn[standard]==0.38.0
 pydantic==2.12.5
-requests==2.32.5
 httpx==0.28.1
 python-multipart==0.0.20
 openai==2.13.0
@@ -9,6 +8,10 @@ pytest==9.0.2
 black==24.10.0
 sqlmodel==0.0.24
 sqlalchemy==2.0.41
+greenlet==3.3.0
 pymysql==1.1.2
 aiomysql==0.2.0
 aiosqlite==0.21.0
+aiofiles==24.1.0
+alembic==1.14.1
+asyncio-mqtt==0.16.2

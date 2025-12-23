@@ -14,6 +14,7 @@ import {
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
+import { useEventRefresh } from "../../hooks/useEventRefresh";
 
 export function XlightsTools() {
   const nav = useNavigate();
@@ -60,6 +61,13 @@ export function XlightsTools() {
   useEffect(() => {
     void refreshFiles();
   }, []);
+
+  useEventRefresh({
+    types: ["files", "tick"],
+    refresh: refreshFiles,
+    minIntervalMs: 5000,
+    ignoreEvents: ["list", "status"],
+  });
 
   const networksCandidates = useMemo(
     () => files.filter((f) => f.toLowerCase().endsWith("xlights_networks.xml")),
