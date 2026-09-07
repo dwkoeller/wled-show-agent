@@ -313,27 +313,27 @@ export function MetadataTools() {
       const histLimit = parseInt(historyLimit || "10", 10) || 10;
       const [la, pk, sq, au, sc, fe, fs, rs, rh, pc, metaRet, jobs] =
         await Promise.all([
-          api<LastApplied>("/v1/meta/last_applied?_", { method: "GET" }),
-          api<PacksRes>("/v1/meta/packs?limit=50", { method: "GET" }),
-          api<SequencesRes>("/v1/meta/sequences?limit=100", { method: "GET" }),
-          api<AudioRes>("/v1/meta/audio_analyses?limit=50", { method: "GET" }),
-          api<ShowConfigsRes>("/v1/meta/show_configs?limit=50", { method: "GET" }),
-          api<FseqExportsRes>("/v1/meta/fseq_exports?limit=50", { method: "GET" }),
-          api<FppScriptsRes>("/v1/meta/fpp_scripts?limit=50", { method: "GET" }),
-          api<ReconcileStatusRes>("/v1/meta/reconcile/status", {
+          api<LastApplied>("/api/meta/last_applied?_", { method: "GET" }),
+          api<PacksRes>("/api/meta/packs?limit=50", { method: "GET" }),
+          api<SequencesRes>("/api/meta/sequences?limit=100", { method: "GET" }),
+          api<AudioRes>("/api/meta/audio_analyses?limit=50", { method: "GET" }),
+          api<ShowConfigsRes>("/api/meta/show_configs?limit=50", { method: "GET" }),
+          api<FseqExportsRes>("/api/meta/fseq_exports?limit=50", { method: "GET" }),
+          api<FppScriptsRes>("/api/meta/fpp_scripts?limit=50", { method: "GET" }),
+          api<ReconcileStatusRes>("/api/meta/reconcile/status", {
             method: "GET",
           }).catch(() => null),
           api<ReconcileHistoryRes>(
-            `/v1/meta/reconcile/history?limit=${histLimit}&offset=${historyOffset}`,
+            `/api/meta/reconcile/history?limit=${histLimit}&offset=${historyOffset}`,
             { method: "GET" },
           ).catch(() => null),
-          api<PreviewCacheRes>("/v1/sequences/preview/cache", {
+          api<PreviewCacheRes>("/api/sequences/preview/cache", {
             method: "GET",
           }).catch(() => null),
-          api<MetaRetentionRes>("/v1/meta/retention", { method: "GET" }).catch(
+          api<MetaRetentionRes>("/api/meta/retention", { method: "GET" }).catch(
             () => null,
           ),
-          api<JobsRes>("/v1/jobs?limit=100", { method: "GET" }).catch(() => null),
+          api<JobsRes>("/api/jobs?limit=100", { method: "GET" }).catch(() => null),
         ]);
       setLastApplied(la);
       setPacks(pk.packs ?? []);
@@ -368,7 +368,7 @@ export function MetadataTools() {
   const fetchMetaRetention = async () => {
     setMetaRetentionError(null);
     try {
-      const res = await api<MetaRetentionRes>("/v1/meta/retention", {
+      const res = await api<MetaRetentionRes>("/api/meta/retention", {
         method: "GET",
       });
       setMetaRetention(res);
@@ -402,7 +402,7 @@ export function MetadataTools() {
       const days = parseInt(metaRetentionOverrides[key]?.days || "", 10);
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
-        `/v1/meta/retention?${params.toString()}`,
+        `/api/meta/retention?${params.toString()}`,
         { method: "POST", json: {} },
       );
       setMetaRetentionResult((prev) => ({ ...prev, [key]: res.result ?? null }));
@@ -441,7 +441,7 @@ export function MetadataTools() {
       q.set("precompute_waveforms", precomputeWaveforms ? "true" : "false");
       q.set("scan_limit", String(parseInt(scanLimit || "5000", 10) || 5000));
       const res = await api<ReconcileRes>(
-        `/v1/meta/reconcile?${q.toString()}`,
+        `/api/meta/reconcile?${q.toString()}`,
         {
           method: "POST",
           json: {},
@@ -460,7 +460,7 @@ export function MetadataTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/meta/reconcile/cancel", { method: "POST", json: {} });
+      await api("/api/meta/reconcile/cancel", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -484,7 +484,7 @@ export function MetadataTools() {
       if (Number.isFinite(lim) && lim > 0) {
         params.set("scan_limit", String(lim));
       }
-      const res = await api<any>(`/v1/meta/precompute?${params.toString()}`, {
+      const res = await api<any>(`/api/meta/precompute?${params.toString()}`, {
         method: "POST",
         json: {},
       });
@@ -517,8 +517,8 @@ export function MetadataTools() {
       }
       const url =
         params.toString().length > 0
-          ? `/v1/sequences/preview/purge?${params.toString()}`
-          : "/v1/sequences/preview/purge";
+          ? `/api/sequences/preview/purge?${params.toString()}`
+          : "/api/sequences/preview/purge";
       const res = await api<PreviewCachePurgeRes>(url, {
         method: "POST",
         json: {},

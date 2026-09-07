@@ -238,7 +238,7 @@ class AsyncFPPClient:
         """
         Best-effort discovery: return system info + which common endpoints appear reachable.
 
-        This is intentionally lightweight; if your FPP version differs, use /v1/fpp/request.
+        This is intentionally lightweight; if your FPP version differs, use /api/fpp/request.
         """
         out: Dict[str, Any] = {"base_url": self.base_url}
         try:

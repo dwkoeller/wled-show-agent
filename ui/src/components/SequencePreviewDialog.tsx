@@ -51,7 +51,7 @@ export function SequencePreviewDialog(props: {
     params.set("format", format);
     if (forceRefresh) params.set("refresh", "1");
     params.set("_", String(refreshKey || Date.now()));
-    const url = `/v1/sequences/preview?${params.toString()}`;
+    const url = `/api/sequences/preview?${params.toString()}`;
 
     fetch(url, { credentials: "include" })
       .then(async (resp) => {

@@ -282,12 +282,12 @@ export function DashboardPage() {
     setBusy(true);
     try {
       const out: Record<string, unknown> = {};
-      out.health = await api("/v1/health", { method: "GET" });
-      out.wled = await api("/v1/wled/info", { method: "GET" });
-      out.ddp = await api("/v1/ddp/status", { method: "GET" });
-      out.sequence = await api("/v1/sequences/status", { method: "GET" });
+      out.health = await api("/api/health", { method: "GET" });
+      out.wled = await api("/api/wled/info", { method: "GET" });
+      out.ddp = await api("/api/ddp/status", { method: "GET" });
+      out.sequence = await api("/api/sequences/status", { method: "GET" });
       try {
-        out.runtime_state = await api("/v1/runtime_state", { method: "GET" });
+        out.runtime_state = await api("/api/runtime_state", { method: "GET" });
       } catch (e) {
         out.runtime_state = {
           ok: false,
@@ -295,7 +295,7 @@ export function DashboardPage() {
         };
       }
       try {
-        out.scheduler = await api("/v1/scheduler/status", { method: "GET" });
+        out.scheduler = await api("/api/scheduler/status", { method: "GET" });
       } catch (e) {
         out.scheduler = {
           ok: false,
@@ -303,21 +303,21 @@ export function DashboardPage() {
         };
       }
       try {
-        out.fleet = await api("/v1/fleet/peers", { method: "GET" });
+        out.fleet = await api("/api/fleet/peers", { method: "GET" });
         try {
-          out.fleet_db = await api("/v1/fleet/status", { method: "GET" });
+          out.fleet_db = await api("/api/fleet/status", { method: "GET" });
         } catch (e) {
           out.fleet_db = {
             ok: false,
             error: e instanceof Error ? e.message : String(e),
           };
         }
-        out.fleet_status = await api("/v1/fleet/invoke", {
+        out.fleet_status = await api("/api/fleet/invoke", {
           method: "POST",
           json: { action: "status", params: {}, include_self: true },
         });
         try {
-          const health = await api<FleetHealthRes>("/v1/fleet/health", {
+          const health = await api<FleetHealthRes>("/api/fleet/health", {
             method: "GET",
           });
           setFleetHealth(health);
@@ -335,7 +335,7 @@ export function DashboardPage() {
         setFleetHealthError(null);
       }
       try {
-        out.last_applied = await api("/v1/meta/last_applied", {
+        out.last_applied = await api("/api/meta/last_applied", {
           method: "GET",
         });
       } catch (e) {
@@ -346,7 +346,7 @@ export function DashboardPage() {
       }
       if (config?.ledfx_enabled) {
         try {
-          out.ledfx = await api("/v1/ledfx/status", { method: "GET" });
+          out.ledfx = await api("/api/ledfx/status", { method: "GET" });
         } catch (e) {
           out.ledfx = {
             ok: false,
@@ -366,7 +366,7 @@ export function DashboardPage() {
   const loadLists = async () => {
     try {
       const pats = await api<{ ok: boolean; patterns: string[] }>(
-        "/v1/ddp/patterns",
+        "/api/ddp/patterns",
         { method: "GET" },
       );
       setPatterns(pats.patterns || []);
@@ -376,7 +376,7 @@ export function DashboardPage() {
     }
     try {
       const seq = await api<{ ok: boolean; files: string[] }>(
-        "/v1/sequences/list",
+        "/api/sequences/list",
         { method: "GET" },
       );
       setSequences(seq.files || []);
@@ -386,7 +386,7 @@ export function DashboardPage() {
     }
     try {
       const eff = await api<{ ok: boolean; effects: string[] }>(
-        "/v1/wled/effects",
+        "/api/wled/effects",
         { method: "GET" },
       );
       setWledEffects(eff.effects || []);
@@ -395,7 +395,7 @@ export function DashboardPage() {
     }
     try {
       const pal = await api<{ ok: boolean; palettes: string[] }>(
-        "/v1/wled/palettes",
+        "/api/wled/palettes",
         { method: "GET" },
       );
       setWledPalettes(pal.palettes || []);
@@ -564,7 +564,7 @@ export function DashboardPage() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fleet/stop_all", { method: "POST", json: {} });
+      await api("/api/fleet/stop_all", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -581,12 +581,12 @@ export function DashboardPage() {
       const brightness = lookBri.trim() ? parseInt(lookBri.trim(), 10) : null;
       const targets = parseTargets(lookTargets);
       if (lookScope === "fleet") {
-        await api("/v1/fleet/apply_random_look", {
+        await api("/api/fleet/apply_random_look", {
           method: "POST",
           json: { theme, brightness, targets, include_self: true },
         });
       } else {
-        await api("/v1/looks/apply_random", {
+        await api("/api/looks/apply_random", {
           method: "POST",
           json: { theme, brightness },
         });
@@ -655,7 +655,7 @@ export function DashboardPage() {
       const res = await api<{
         ok: boolean;
         presets: OrchestrationPreset[];
-      }>("/v1/orchestration/presets?limit=200&scope=crossfade", {
+      }>("/api/orchestration/presets?limit=200&scope=crossfade", {
         method: "GET",
       });
       setSavedCrossfadePresets(res.presets ?? []);
@@ -840,7 +840,7 @@ export function DashboardPage() {
         throw new Error(errors.join(" "));
       }
       const res = await api<{ ok: boolean; preset: OrchestrationPreset }>(
-        "/v1/orchestration/presets",
+        "/api/orchestration/presets",
         {
           method: "POST",
           json: {
@@ -873,7 +873,7 @@ export function DashboardPage() {
     setBusy(true);
     setError(null);
     try {
-      await api(`/v1/orchestration/presets/${current.id}`, {
+      await api(`/api/orchestration/presets/${current.id}`, {
         method: "DELETE",
       });
       setFadePreset("");
@@ -988,9 +988,9 @@ export function DashboardPage() {
       }
 
       if (fadeScope === "fleet") {
-        await api("/v1/fleet/crossfade", { method: "POST", json: payload });
+        await api("/api/fleet/crossfade", { method: "POST", json: payload });
       } else {
-        await api("/v1/orchestration/crossfade", {
+        await api("/api/orchestration/crossfade", {
           method: "POST",
           json: payload,
         });
@@ -1018,7 +1018,7 @@ export function DashboardPage() {
       const targets = parseTargets(patTargets);
 
       if (patScope === "fleet") {
-        await api("/v1/fleet/invoke", {
+        await api("/api/fleet/invoke", {
           method: "POST",
           json: {
             action: "start_ddp_pattern",
@@ -1028,7 +1028,7 @@ export function DashboardPage() {
           },
         });
       } else {
-        await api("/v1/ddp/start", { method: "POST", json: payload });
+        await api("/api/ddp/start", { method: "POST", json: payload });
       }
       await refresh();
     } catch (e) {
@@ -1044,12 +1044,12 @@ export function DashboardPage() {
     try {
       const targets = parseTargets(patTargets);
       if (patScope === "fleet") {
-        await api("/v1/fleet/invoke", {
+        await api("/api/fleet/invoke", {
           method: "POST",
           json: { action: "stop_ddp", params: {}, targets, include_self: true },
         });
       } else {
-        await api("/v1/ddp/stop", { method: "POST", json: {} });
+        await api("/api/ddp/stop", { method: "POST", json: {} });
       }
       await refresh();
     } catch (e) {
@@ -1064,7 +1064,7 @@ export function DashboardPage() {
     setError(null);
     try {
       const targets = parseTargets(seqTargets);
-      await api("/v1/fleet/sequences/start", {
+      await api("/api/fleet/sequences/start", {
         method: "POST",
         json: { file: seqFile, loop: seqLoop, targets, include_self: true },
       });
@@ -1081,7 +1081,7 @@ export function DashboardPage() {
     setError(null);
     try {
       const targets = parseTargets(seqTargets);
-      await api("/v1/fleet/sequences/start_staggered", {
+      await api("/api/fleet/sequences/start_staggered", {
         method: "POST",
         json: {
           file: seqFile,
@@ -1104,7 +1104,7 @@ export function DashboardPage() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fleet/sequences/stop", { method: "POST", json: {} });
+      await api("/api/fleet/sequences/stop", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1181,7 +1181,7 @@ export function DashboardPage() {
         <CardContent>
           <Typography variant="h6">Fleet health</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Cached summary from <code>/v1/fleet/health</code>.
+            Cached summary from <code>/api/fleet/health</code>.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: "wrap" }}>
             <Chip
@@ -1234,7 +1234,7 @@ export function DashboardPage() {
           <CardContent>
             <Typography variant="h6">LedFx status</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Current LedFx state from <code>/v1/ledfx/status</code>.
+              Current LedFx state from <code>/api/ledfx/status</code>.
             </Typography>
             <Box
               component="pre"

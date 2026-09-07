@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 test("crossfade presets load and populate builder fields", async ({ page }) => {
-  await page.route("**/v1/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
 
-    if (path === "/v1/auth/config") {
+    if (path === "/api/auth/config") {
       await route.fulfill({
         json: {
           ok: true,
@@ -21,11 +21,11 @@ test("crossfade presets load and populate builder fields", async ({ page }) => {
       });
       return;
     }
-    if (path === "/v1/auth/me") {
+    if (path === "/api/auth/me") {
       await route.fulfill({ json: { ok: true, user: { username: "tester" } } });
       return;
     }
-    if (path === "/v1/orchestration/presets") {
+    if (path === "/api/orchestration/presets") {
       if (!url.searchParams.get("scope")?.includes("crossfade")) {
         await route.fulfill({ json: { ok: true, presets: [] } });
         return;
@@ -72,8 +72,8 @@ test("crossfade presets load and populate builder fields", async ({ page }) => {
     await route.fulfill({ json: { ok: true } });
   });
 
-  const presetsResponse = page.waitForResponse("**/v1/orchestration/presets**");
-  await page.goto(".");
+  const presetsResponse = page.waitForResponse("**/api/orchestration/presets**");
+  await page.goto("dashboard");
   await presetsResponse;
   await page.getByRole("button", { name: "Crossfade", exact: true }).click();
 

@@ -224,7 +224,7 @@ export function EventsTools() {
     let active = true;
     const fetchStats = async () => {
       try {
-        const res = await api<EventStatsRes>("/v1/events/stats?include_clients=true", {
+        const res = await api<EventStatsRes>("/api/events/stats?include_clients=true", {
           method: "GET",
         });
         if (!active) return;
@@ -246,7 +246,7 @@ export function EventsTools() {
   const fetchRetention = async () => {
     setRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/events/retention", {
+      const res = await api<RetentionRes>("/api/events/retention", {
         method: "GET",
       });
       setRetention(res);
@@ -267,8 +267,8 @@ export function EventsTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/events/retention?${params.toString()}`
-          : "/v1/events/retention";
+          ? `/api/events/retention?${params.toString()}`
+          : "/api/events/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -349,7 +349,7 @@ export function EventsTools() {
       if (opts?.offset != null) setHistoryOffset(String(off));
       if (opts?.afterId != null) setHistoryAfterId(String(opts.afterId));
       const res = await api<EventHistoryRes>(
-        `/v1/events/history?${q.toString()}`,
+        `/api/events/history?${q.toString()}`,
         { method: "GET" },
       );
       setHistoryRows(res.events || []);
@@ -378,7 +378,7 @@ export function EventsTools() {
         : exportFormat === "ndjson" || exportFormat === "jsonl"
           ? "event_history.jsonl"
           : "event_history.csv";
-    const resp = await fetch(`/v1/events/history/export?${q.toString()}`, {
+    const resp = await fetch(`/api/events/history/export?${q.toString()}`, {
       method: "GET",
       credentials: "include",
     });

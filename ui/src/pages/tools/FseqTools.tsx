@@ -38,7 +38,7 @@ export function FseqTools() {
   const refresh = async () => {
     try {
       const seq = await api<{ ok: boolean; files: string[] }>(
-        "/v1/sequences/list",
+        "/api/sequences/list",
         { method: "GET" },
       );
       setSequences(seq.files || []);
@@ -48,7 +48,7 @@ export function FseqTools() {
     }
     try {
       const res = await api<{ ok: boolean; files: string[] }>(
-        "/v1/files/list?dir=fseq&recursive=true&glob=*.fseq&limit=200",
+        "/api/files/list?dir=fseq&recursive=true&glob=*.fseq&limit=200",
         { method: "GET" },
       );
       setFseqFiles(res.files || []);
@@ -79,7 +79,7 @@ export function FseqTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/jobs/fseq/export", {
+      await api("/api/jobs/fseq/export", {
         method: "POST",
         json: {
           sequence_file: sequenceFile,
@@ -215,7 +215,7 @@ export function FseqTools() {
                     size="small"
                     startIcon={<DownloadIcon />}
                     component="a"
-                    href={`/v1/files/download?path=${encodeURIComponent(f)}`}
+                    href={`/api/files/download?path=${encodeURIComponent(f)}`}
                     target="_blank"
                     rel="noreferrer"
                   >

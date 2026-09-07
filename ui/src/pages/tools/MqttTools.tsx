@@ -73,7 +73,7 @@ export function MqttTools() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<MqttStatus>("/v1/mqtt/status", { method: "GET" });
+      const res = await api<MqttStatus>("/api/mqtt/status", { method: "GET" });
       setStatus(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

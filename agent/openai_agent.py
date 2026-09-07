@@ -118,7 +118,7 @@ class SimpleDirectorAgent:
                     "properties": {
                         "file": {
                             "type": "string",
-                            "description": "Sequence filename from /v1/sequences/list",
+                            "description": "Sequence filename from /api/sequences/list",
                         },
                         "loop": {"type": "boolean"},
                         "targets": {"type": "array", "items": {"type": "string"}},

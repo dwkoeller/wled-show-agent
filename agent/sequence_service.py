@@ -43,6 +43,7 @@ class SequenceService:
         self._cpu_pool = cpu_pool
 
         self._lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._status = SequenceStatus(
@@ -100,6 +101,10 @@ class SequenceService:
             return SequenceStatus(**self._status.__dict__)
 
     async def stop(self) -> SequenceStatus:
+        async with self._lifecycle_lock:
+            return await self._stop_sequence()
+
+    async def _stop_sequence(self) -> SequenceStatus:
         async with self._lock:
             if not self._status.running:
                 return SequenceStatus(**self._status.__dict__)
@@ -134,8 +139,12 @@ class SequenceService:
             return SequenceStatus(**self._status.__dict__)
 
     async def play(self, *, file: str, loop: bool = False) -> SequenceStatus:
+        async with self._lifecycle_lock:
+            return await self._play_sequence(file=file, loop=loop)
+
+    async def _play_sequence(self, *, file: str, loop: bool = False) -> SequenceStatus:
         # Stop current.
-        await self.stop()
+        await self._stop_sequence()
         seq_path = self._seq_dir() / file
         seq = await read_json_async(str(seq_path))
         steps: List[Dict[str, Any]] = list((seq or {}).get("steps", []))

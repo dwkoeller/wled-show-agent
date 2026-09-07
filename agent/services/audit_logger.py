@@ -44,7 +44,7 @@ async def log_event(
     resource: str | None = None,
     error: str | None = None,
     payload: Dict[str, Any] | None = None,
-    request: Request | None = None,
+    request: Request = None,
     emit: bool = True,
 ) -> None:
     actor_val = str(actor or _actor_from_request(request) or "unknown")

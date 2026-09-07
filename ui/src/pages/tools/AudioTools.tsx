@@ -71,10 +71,10 @@ export function AudioTools() {
     try {
       const [res, cache] = await Promise.all([
         api<{ ok: boolean; files: string[] }>(
-          "/v1/files/list?dir=music&recursive=true&limit=200",
+          "/api/files/list?dir=music&recursive=true&limit=200",
           { method: "GET" },
         ),
-        api<WaveformCacheRes>("/v1/audio/waveform/cache", {
+        api<WaveformCacheRes>("/api/audio/waveform/cache", {
           method: "GET",
         }).catch(() => null),
       ]);
@@ -107,7 +107,7 @@ export function AudioTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/jobs/audio/analyze", {
+      await api("/api/jobs/audio/analyze", {
         method: "POST",
         json: {
           audio_file: audioFile,
@@ -149,8 +149,8 @@ export function AudioTools() {
       }
       const url =
         params.toString().length > 0
-          ? `/v1/audio/waveform/purge?${params.toString()}`
-          : "/v1/audio/waveform/purge";
+          ? `/api/audio/waveform/purge?${params.toString()}`
+          : "/api/audio/waveform/purge";
       const res = await api<WaveformCachePurgeRes>(url, {
         method: "POST",
         json: {},

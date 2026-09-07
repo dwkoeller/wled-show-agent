@@ -399,7 +399,7 @@ class EventLogRecord(SQLModel, table=True):
 
 class MetricsSampleRecord(SQLModel, table=True):
     """
-    Time-series snapshots from /v1/metrics for UI charts.
+    Time-series snapshots from /api/metrics for UI charts.
     """
 
     __tablename__ = "metrics_samples"

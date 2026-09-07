@@ -214,15 +214,15 @@ export function AuthTools() {
       const attemptsLimit = toLimit(attemptLimit, 50);
       const keysLimit = toLimit(apiLimit, 50);
       const [u, s, a, k] = await Promise.all([
-        api<AuthUsersRes>("/v1/auth/users", { method: "GET" }),
+        api<AuthUsersRes>("/api/auth/users", { method: "GET" }),
         api<AuthSessionsRes>(
-          `/v1/auth/sessions?active_only=${activeOnly ? "true" : "false"}&username=${encodeURIComponent(
+          `/api/auth/sessions?active_only=${activeOnly ? "true" : "false"}&username=${encodeURIComponent(
             sessionUserFilter.trim(),
           )}&limit=${encodeURIComponent(String(sessionsLimit))}&offset=${sessionOffset}`,
           { method: "GET" },
         ),
         api<AuthLoginAttemptsRes>(
-          `/v1/auth/login_attempts?locked_only=${attemptLockedOnly ? "true" : "false"}&username=${encodeURIComponent(
+          `/api/auth/login_attempts?locked_only=${attemptLockedOnly ? "true" : "false"}&username=${encodeURIComponent(
             attemptUserFilter.trim(),
           )}&ip=${encodeURIComponent(attemptIpFilter.trim())}&limit=${encodeURIComponent(
             String(attemptsLimit),
@@ -230,7 +230,7 @@ export function AuthTools() {
           { method: "GET" },
         ),
         api<AuthApiKeysRes>(
-          `/v1/auth/api_keys?active_only=${apiActiveOnly ? "true" : "false"}&username=${encodeURIComponent(
+          `/api/auth/api_keys?active_only=${apiActiveOnly ? "true" : "false"}&username=${encodeURIComponent(
             apiUserFilter.trim(),
           )}&limit=${encodeURIComponent(String(keysLimit))}&offset=${apiOffset}`,
           { method: "GET" },
@@ -280,7 +280,7 @@ export function AuthTools() {
     setError(null);
     setCreateResult(null);
     try {
-      const res = await api<AuthUserCreateRes>("/v1/auth/users", {
+      const res = await api<AuthUserCreateRes>("/api/auth/users", {
         method: "POST",
         json: {
           username: newUsername.trim(),
@@ -310,7 +310,7 @@ export function AuthTools() {
     setUpdateResult(null);
     try {
       const res = await api<AuthUserUpdateRes>(
-        `/v1/auth/users/${encodeURIComponent(selectedUser)}`,
+        `/api/auth/users/${encodeURIComponent(selectedUser)}`,
         {
           method: "PUT",
           json: {
@@ -338,7 +338,7 @@ export function AuthTools() {
     setBusy(true);
     setError(null);
     try {
-      await api(`/v1/auth/users/${encodeURIComponent(username)}`, {
+      await api(`/api/auth/users/${encodeURIComponent(username)}`, {
         method: "DELETE",
       });
       await refreshAdmin();
@@ -353,7 +353,7 @@ export function AuthTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/auth/sessions/revoke", {
+      await api("/api/auth/sessions/revoke", {
         method: "POST",
         json: { jti },
       });
@@ -369,7 +369,7 @@ export function AuthTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/auth/sessions/revoke", {
+      await api("/api/auth/sessions/revoke", {
         method: "POST",
         json: { username },
       });
@@ -389,7 +389,7 @@ export function AuthTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/auth/login_attempts/clear", {
+      await api("/api/auth/login_attempts/clear", {
         method: "POST",
         json: args,
       });
@@ -407,7 +407,7 @@ export function AuthTools() {
     setApiCreateResult(null);
     try {
       const expiresIn = Number(apiExpiresIn);
-      const res = await api<AuthApiKeyCreateRes>("/v1/auth/api_keys", {
+      const res = await api<AuthApiKeyCreateRes>("/api/auth/api_keys", {
         method: "POST",
         json: {
           username: apiUsername.trim(),
@@ -433,7 +433,7 @@ export function AuthTools() {
     try {
       const ttl = Number(resetTtl);
       const res = await api<{ ok: boolean; token: string }>(
-        "/v1/auth/password/reset_request",
+        "/api/auth/password/reset_request",
         {
           method: "POST",
           json: {
@@ -454,7 +454,7 @@ export function AuthTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/auth/api_keys/revoke", {
+      await api("/api/auth/api_keys/revoke", {
         method: "POST",
         json: { id },
       });
@@ -474,7 +474,7 @@ export function AuthTools() {
       if (pwNew !== pwConfirm) {
         throw new Error("New password confirmation does not match.");
       }
-      await api("/v1/auth/password/change", {
+      await api("/api/auth/password/change", {
         method: "POST",
         json: {
           current_password: pwCurrent,

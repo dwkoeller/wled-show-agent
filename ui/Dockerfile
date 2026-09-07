@@ -12,5 +12,4 @@ FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 RUN rm -rf /usr/share/nginx/html/*
-RUN mkdir -p /usr/share/nginx/html/ui
-COPY --from=build /ui/dist/ /usr/share/nginx/html/ui/
+COPY --from=build /ui/dist/ /usr/share/nginx/html/

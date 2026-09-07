@@ -83,7 +83,7 @@ async def voice_command(
     file: UploadFile = File(...),
     language: str | None = Form(default=None),
     prompt: str | None = Form(default=None),
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:

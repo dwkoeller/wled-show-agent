@@ -778,7 +778,7 @@ async def a2a_card(
             "name": s.agent_name,
             "role": s.agent_role,
             "version": APP_VERSION,
-            "endpoints": {"card": "/v1/a2a/card", "invoke": "/v1/a2a/invoke"},
+            "endpoints": {"card": "/api/a2a/card", "invoke": "/api/a2a/invoke"},
             "wled": {
                 "url": s.wled_tree_url,
                 "segment_ids": list(state.segment_ids or []),

@@ -8,48 +8,49 @@ from services import scheduler_service
 router = APIRouter()
 
 router.add_api_route(
-    "/v1/scheduler/status",
+    "/api/scheduler/status",
     scheduler_service.scheduler_status,
     methods=["GET"],
 )
 router.add_api_route(
-    "/v1/scheduler/config",
+    "/api/scheduler/config",
     scheduler_service.scheduler_get_config,
     methods=["GET"],
 )
 router.add_api_route(
-    "/v1/scheduler/config",
+    "/api/scheduler/config",
     scheduler_service.scheduler_set_config,
     methods=["POST"],
 )
 router.add_api_route(
-    "/v1/scheduler/start", scheduler_service.scheduler_start, methods=["POST"]
+    "/api/scheduler/start", scheduler_service.scheduler_start, methods=["POST"]
 )
 router.add_api_route(
-    "/v1/scheduler/stop", scheduler_service.scheduler_stop, methods=["POST"]
+    "/api/scheduler/stop", scheduler_service.scheduler_stop, methods=["POST"]
 )
 router.add_api_route(
-    "/v1/scheduler/run_once",
+    "/api/scheduler/run_once",
     scheduler_service.scheduler_run_once,
     methods=["POST"],
 )
 router.add_api_route(
-    "/v1/scheduler/events",
+    "/api/scheduler/events",
     scheduler_service.scheduler_events,
     methods=["GET"],
 )
 router.add_api_route(
-    "/v1/scheduler/events/export",
+    "/api/scheduler/events/export",
     scheduler_service.scheduler_events_export,
+    response_model=None,
     methods=["GET"],
 )
 router.add_api_route(
-    "/v1/scheduler/retention",
+    "/api/scheduler/retention",
     scheduler_service.scheduler_retention_status,
     methods=["GET"],
 )
 router.add_api_route(
-    "/v1/scheduler/retention",
+    "/api/scheduler/retention",
     scheduler_service.scheduler_retention_cleanup,
     methods=["POST"],
 )

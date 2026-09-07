@@ -384,7 +384,7 @@ export function FleetTools() {
   const fetchHistoryRetention = async () => {
     setHistoryRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/fleet/history/retention", {
+      const res = await api<RetentionRes>("/api/fleet/history/retention", {
         method: "GET",
       });
       setHistoryRetention(res);
@@ -405,8 +405,8 @@ export function FleetTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/fleet/history/retention?${params.toString()}`
-          : "/v1/fleet/history/retention";
+          ? `/api/fleet/history/retention?${params.toString()}`
+          : "/api/fleet/history/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -424,7 +424,7 @@ export function FleetTools() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<FleetStatusRes>("/v1/fleet/status", {
+      const res = await api<FleetStatusRes>("/api/fleet/status", {
         method: "GET",
       });
       setData(res);
@@ -434,7 +434,7 @@ export function FleetTools() {
         if (opts?.historyOffset != null) setHistoryOffset(String(off));
         const q = buildHistoryQuery(lim, off);
         const hist = await api<FleetHistoryRes>(
-          `/v1/fleet/history?${q.toString()}`,
+          `/api/fleet/history?${q.toString()}`,
           {
             method: "GET",
           },
@@ -459,7 +459,7 @@ export function FleetTools() {
         q.set("scope", "fleet");
         if (runOff > 0) q.set("offset", String(runOff));
         const runsRes = await api<OrchestrationRunsRes>(
-          `/v1/orchestration/runs?${q.toString()}`,
+          `/api/orchestration/runs?${q.toString()}`,
           { method: "GET" },
         );
         setRuns(runsRes.runs ?? []);
@@ -474,7 +474,7 @@ export function FleetTools() {
         setRunsMeta(null);
       }
       try {
-        const ledfxRes = await api<LedfxFleetRes>("/v1/ledfx/fleet", {
+        const ledfxRes = await api<LedfxFleetRes>("/api/ledfx/fleet", {
           method: "GET",
         });
         setLedfxFleet(ledfxRes);
@@ -482,7 +482,7 @@ export function FleetTools() {
         setLedfxFleet(null);
       }
       try {
-        const healthRes = await api<FleetHealthRes>("/v1/fleet/health", {
+        const healthRes = await api<FleetHealthRes>("/api/fleet/health", {
           method: "GET",
         });
         setHealth(healthRes);
@@ -542,7 +542,7 @@ export function FleetTools() {
     q.set("format", format);
     const filename =
       format === "json" ? "fleet_orchestration_runs.json" : "fleet_orchestration_runs.csv";
-    await downloadExport(`/v1/orchestration/runs/export?${q.toString()}`, filename);
+    await downloadExport(`/api/orchestration/runs/export?${q.toString()}`, filename);
   };
 
   const exportRunSteps = async (runId: string, format: "csv" | "json") => {
@@ -559,7 +559,7 @@ export function FleetTools() {
         ? `fleet_orchestration_steps_${runId}.json`
         : `fleet_orchestration_steps_${runId}.csv`;
     await downloadExport(
-      `/v1/orchestration/runs/${encodeURIComponent(runId)}/steps/export?${q.toString()}`,
+      `/api/orchestration/runs/${encodeURIComponent(runId)}/steps/export?${q.toString()}`,
       filename,
     );
   };
@@ -578,7 +578,7 @@ export function FleetTools() {
         ? `fleet_orchestration_peers_${runId}.json`
         : `fleet_orchestration_peers_${runId}.csv`;
     await downloadExport(
-      `/v1/orchestration/runs/${encodeURIComponent(runId)}/peers/export?${q.toString()}`,
+      `/api/orchestration/runs/${encodeURIComponent(runId)}/peers/export?${q.toString()}`,
       filename,
     );
   };
@@ -589,7 +589,7 @@ export function FleetTools() {
     const q = buildHistoryQuery(lim, off);
     q.set("format", format);
     const filename = format === "json" ? "fleet_history.json" : "fleet_history.csv";
-    await downloadExport(`/v1/fleet/history/export?${q.toString()}`, filename);
+    await downloadExport(`/api/fleet/history/export?${q.toString()}`, filename);
   };
 
   const pageHistory = async (dir: "prev" | "next") => {
@@ -652,7 +652,7 @@ export function FleetTools() {
       if (opts?.stepsOffset != null) setDetailStepsOffset(String(stepsOffset));
       if (opts?.peersOffset != null) setDetailPeersOffset(String(peersOffset));
       const detail = await api<OrchestrationRunDetailRes>(
-        `/v1/orchestration/runs/${encodeURIComponent(runId)}?${q.toString()}`,
+        `/api/orchestration/runs/${encodeURIComponent(runId)}?${q.toString()}`,
         { method: "GET" },
       );
       setRunDetails((prev) => ({ ...prev, [runId]: detail }));
@@ -808,7 +808,7 @@ export function FleetTools() {
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
-      await api(`/v1/fleet/overrides/${encodeURIComponent(overrideAgent.agent_id)}`, {
+      await api(`/api/fleet/overrides/${encodeURIComponent(overrideAgent.agent_id)}`, {
         method: "PUT",
         json: {
           role: roleVal ? roleVal : null,
@@ -830,7 +830,7 @@ export function FleetTools() {
     setOverrideError(null);
     try {
       await api(
-        `/v1/fleet/overrides/${encodeURIComponent(overrideAgent.agent_id)}`,
+        `/api/fleet/overrides/${encodeURIComponent(overrideAgent.agent_id)}`,
         {
           method: "DELETE",
         },
@@ -868,7 +868,7 @@ export function FleetTools() {
       q.set("format", format);
       if (dryRun) q.set("dry_run", "true");
       const resp = await fetch(
-        `/v1/fleet/overrides/import?${q.toString()}`,
+        `/api/fleet/overrides/import?${q.toString()}`,
         {
           method: "POST",
           credentials: "include",
@@ -904,7 +904,7 @@ export function FleetTools() {
     setOverrideExportError(null);
     try {
       const resp = await fetch(
-        `/v1/fleet/overrides/export?format=${encodeURIComponent(format)}`,
+        `/api/fleet/overrides/export?format=${encodeURIComponent(format)}`,
         {
           method: "GET",
           credentials: "include",
@@ -941,7 +941,7 @@ export function FleetTools() {
     setOverrideExportBusy(true);
     setOverrideExportError(null);
     try {
-      const resp = await fetch("/v1/fleet/overrides/template", {
+      const resp = await fetch("/api/fleet/overrides/template", {
         method: "GET",
         credentials: "include",
       });
@@ -982,7 +982,7 @@ export function FleetTools() {
             <Typography variant="h6">Fleet</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary">
-            Status is derived from SQL heartbeats (<code>/v1/fleet/status</code>
+            Status is derived from SQL heartbeats (<code>/api/fleet/status</code>
             ).
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -1008,7 +1008,7 @@ export function FleetTools() {
         <CardContent>
           <Typography variant="h6">Fleet health</Typography>
           <Typography variant="body2" color="text.secondary">
-            Cached WLED/FPP/LedFx health from <code>/v1/fleet/health</code>.
+            Cached WLED/FPP/LedFx health from <code>/api/fleet/health</code>.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: "wrap" }}>
             <Chip
@@ -1665,7 +1665,7 @@ export function FleetTools() {
         <CardContent>
           <Typography variant="h6">History</Typography>
           <Typography variant="body2" color="text.secondary">
-            Periodic fleet snapshots from <code>/v1/fleet/history</code>.
+            Periodic fleet snapshots from <code>/api/fleet/history</code>.
           </Typography>
           <Stack spacing={1} sx={{ mt: 2 }}>
             <TextField
@@ -1802,7 +1802,7 @@ export function FleetTools() {
         <CardContent>
           <Typography variant="h6">Orchestration Runs</Typography>
           <Typography variant="body2" color="text.secondary">
-            Fleet orchestration history from <code>/v1/orchestration/runs</code>.
+            Fleet orchestration history from <code>/api/orchestration/runs</code>.
           </Typography>
           <Stack spacing={1} sx={{ mt: 2 }}>
             <TextField

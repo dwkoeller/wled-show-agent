@@ -288,7 +288,7 @@ class LookService:
         pack = pack_file or await self.latest_pack()
         if not pack:
             raise RuntimeError(
-                "No looks pack found. Generate one first via /v1/looks/generate or /v1/go_crazy."
+                "No looks pack found. Generate one first via /api/looks/generate or /api/go_crazy."
             )
         rows = await self.load_pack(pack)
         if not rows:

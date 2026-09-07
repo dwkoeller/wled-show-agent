@@ -14,92 +14,92 @@ const authConfig = {
 };
 
 async function mockToolApi(page) {
-  await page.route("**/v1/**", async (route) => {
+  await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
 
-    if (path === "/v1/auth/config") {
+    if (path === "/api/auth/config") {
       await route.fulfill({ json: authConfig });
       return;
     }
-    if (path === "/v1/auth/me") {
+    if (path === "/api/auth/me") {
       await route.fulfill({
         json: { ok: true, user: { username: "tester", role: "admin" } },
       });
       return;
     }
 
-    if (path === "/v1/auth/users") {
+    if (path === "/api/auth/users") {
       await route.fulfill({ json: { ok: true, users: [] } });
       return;
     }
-    if (path === "/v1/auth/sessions") {
+    if (path === "/api/auth/sessions") {
       await route.fulfill({
         json: { ok: true, sessions: [], count: 0, limit: 50, offset: 0 },
       });
       return;
     }
-    if (path === "/v1/auth/login_attempts") {
+    if (path === "/api/auth/login_attempts") {
       await route.fulfill({
         json: { ok: true, attempts: [], count: 0, limit: 50, offset: 0 },
       });
       return;
     }
-    if (path === "/v1/auth/api_keys") {
+    if (path === "/api/auth/api_keys") {
       await route.fulfill({
         json: { ok: true, api_keys: [], count: 0, limit: 50, offset: 0 },
       });
       return;
     }
 
-    if (path === "/v1/files/list") {
+    if (path === "/api/files/list") {
       await route.fulfill({ json: { ok: true, files: [] } });
       return;
     }
-    if (path === "/v1/looks/packs") {
+    if (path === "/api/looks/packs") {
       await route.fulfill({ json: { ok: true, packs: [], latest: null } });
       return;
     }
-    if (path === "/v1/sequences/list") {
+    if (path === "/api/sequences/list") {
       await route.fulfill({ json: { ok: true, files: [] } });
       return;
     }
-    if (path === "/v1/ddp/patterns") {
+    if (path === "/api/ddp/patterns") {
       await route.fulfill({ json: { ok: true, patterns: [] } });
       return;
     }
-    if (path === "/v1/wled/presets") {
+    if (path === "/api/wled/presets") {
       await route.fulfill({ json: { ok: true, presets: {} } });
       return;
     }
-    if (path === "/v1/wled/effects") {
+    if (path === "/api/wled/effects") {
       await route.fulfill({ json: { ok: true, effects: [] } });
       return;
     }
-    if (path === "/v1/wled/palettes") {
+    if (path === "/api/wled/palettes") {
       await route.fulfill({ json: { ok: true, palettes: [] } });
       return;
     }
-    if (path === "/v1/meta/last_applied") {
+    if (path === "/api/meta/last_applied") {
       await route.fulfill({ json: { ok: true, last_applied: {} } });
       return;
     }
-    if (path === "/v1/orchestration/presets") {
+    if (path === "/api/orchestration/presets") {
       await route.fulfill({
         json: { ok: true, presets: [], count: 0, limit: 200, offset: 0 },
       });
       return;
     }
-    if (path === "/v1/orchestration/status") {
+    if (path === "/api/orchestration/status") {
       await route.fulfill({ json: { ok: true } });
       return;
     }
-    if (path === "/v1/fleet/orchestration/status") {
+    if (path === "/api/fleet/orchestration/status") {
       await route.fulfill({ json: { ok: true } });
       return;
     }
 
-    if (path === "/v1/fleet/status") {
+    if (path === "/api/fleet/status") {
       await route.fulfill({
         json: {
           ok: true,
@@ -111,7 +111,7 @@ async function mockToolApi(page) {
       });
       return;
     }
-    if (path === "/v1/fleet/health") {
+    if (path === "/api/fleet/health") {
       await route.fulfill({
         json: {
           ok: true,
@@ -128,26 +128,26 @@ async function mockToolApi(page) {
       });
       return;
     }
-    if (path === "/v1/fleet/history") {
+    if (path === "/api/fleet/history") {
       await route.fulfill({
         json: { ok: true, history: [], count: 0, limit: 100, offset: 0 },
       });
       return;
     }
-    if (path === "/v1/orchestration/runs") {
+    if (path === "/api/orchestration/runs") {
       await route.fulfill({
         json: { ok: true, runs: [], count: 0, limit: 100, offset: 0 },
       });
       return;
     }
-    if (path === "/v1/audit/logs") {
+    if (path === "/api/audit/logs") {
       await route.fulfill({
         json: { ok: true, logs: [], count: 0, limit: 50, offset: 0 },
       });
       return;
     }
 
-    if (path === "/v1/scheduler/status") {
+    if (path === "/api/scheduler/status") {
       await route.fulfill({
         json: {
           ok: true,
@@ -162,92 +162,92 @@ async function mockToolApi(page) {
       });
       return;
     }
-    if (path === "/v1/scheduler/events") {
+    if (path === "/api/scheduler/events") {
       await route.fulfill({
         json: { ok: true, events: [], count: 0, limit: 20, offset: 0 },
       });
       return;
     }
 
-    if (path === "/v1/meta/packs") {
+    if (path === "/api/meta/packs") {
       await route.fulfill({ json: { ok: true, packs: [] } });
       return;
     }
-    if (path === "/v1/meta/sequences") {
+    if (path === "/api/meta/sequences") {
       await route.fulfill({ json: { ok: true, sequences: [] } });
       return;
     }
-    if (path === "/v1/meta/audio_analyses") {
+    if (path === "/api/meta/audio_analyses") {
       await route.fulfill({ json: { ok: true, audio_analyses: [] } });
       return;
     }
-    if (path === "/v1/meta/show_configs") {
+    if (path === "/api/meta/show_configs") {
       await route.fulfill({ json: { ok: true, show_configs: [] } });
       return;
     }
-    if (path === "/v1/meta/fseq_exports") {
+    if (path === "/api/meta/fseq_exports") {
       await route.fulfill({ json: { ok: true, fseq_exports: [] } });
       return;
     }
-    if (path === "/v1/meta/fpp_scripts") {
+    if (path === "/api/meta/fpp_scripts") {
       await route.fulfill({ json: { ok: true, fpp_scripts: [] } });
       return;
     }
-    if (path === "/v1/meta/reconcile/status") {
+    if (path === "/api/meta/reconcile/status") {
       await route.fulfill({ json: { ok: true, exists: false, status: null } });
       return;
     }
-    if (path === "/v1/meta/reconcile/history") {
+    if (path === "/api/meta/reconcile/history") {
       await route.fulfill({
         json: { ok: true, runs: [], count: 0, limit: 10, offset: 0 },
       });
       return;
     }
 
-    if (path === "/v1/mqtt/status") {
+    if (path === "/api/mqtt/status") {
       await route.fulfill({
         json: { ok: true, enabled: true, connected: false, base_topic: "wsa/test" },
       });
       return;
     }
-    if (path === "/v1/mqtt/config") {
+    if (path === "/api/mqtt/config") {
       await route.fulfill({
         json: { ok: true, mqtt_enabled: true, base_topic: "wsa/test" },
       });
       return;
     }
 
-    if (path === "/v1/fpp/status") {
+    if (path === "/api/fpp/status") {
       await route.fulfill({ json: { ok: true } });
       return;
     }
-    if (path === "/v1/fpp/discover") {
+    if (path === "/api/fpp/discover") {
       await route.fulfill({ json: { ok: true } });
       return;
     }
-    if (path === "/v1/fpp/playlists") {
+    if (path === "/api/fpp/playlists") {
       await route.fulfill({ json: { ok: true, playlists: [] } });
       return;
     }
-    if (path === "/v1/ledfx/status") {
+    if (path === "/api/ledfx/status") {
       await route.fulfill({ json: { ok: true } });
       return;
     }
-    if (path === "/v1/ledfx/fleet") {
+    if (path === "/api/ledfx/fleet") {
       await route.fulfill({
         json: { ok: true, cached: false, summary: { total: 0 }, agents: {} },
       });
       return;
     }
-    if (path === "/v1/ledfx/virtuals") {
+    if (path === "/api/ledfx/virtuals") {
       await route.fulfill({ json: { ok: true, virtuals: [] } });
       return;
     }
-    if (path === "/v1/ledfx/scenes") {
+    if (path === "/api/ledfx/scenes") {
       await route.fulfill({ json: { ok: true, scenes: [] } });
       return;
     }
-    if (path === "/v1/ledfx/effects") {
+    if (path === "/api/ledfx/effects") {
       await route.fulfill({ json: { ok: true, effects: [] } });
       return;
     }

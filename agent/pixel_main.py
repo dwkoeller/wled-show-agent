@@ -23,7 +23,7 @@ from pixel_streamer import PixelStreamConfig, PixelStreamer
 from services.db_service import DatabaseService
 
 
-app = FastAPI(title="Pixel Streaming Agent", version="3.4.0")
+app = FastAPI(title="Pixel Streaming Agent", version="3.4.0", docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json", swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect")
 
 
 SETTINGS: Settings = load_settings()
@@ -38,10 +38,10 @@ async def _auth_middleware(request: Request, call_next):  # type: ignore[no-unty
 
     path = request.url.path or ""
     if (
-        path.startswith("/v1/health")
-        or path.startswith("/v1/auth/config")
-        or path.startswith("/v1/auth/login")
-        or path.startswith("/v1/auth/logout")
+        path.startswith("/api/health")
+        or path.startswith("/api/auth/config")
+        or path.startswith("/api/auth/login")
+        or path.startswith("/api/auth/logout")
     ):
         return await call_next(request)
 
@@ -311,7 +311,7 @@ def _require_jwt_auth(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail=str(e))
 
 
-@app.get("/v1/auth/config")
+@app.get("/api/auth/config")
 def auth_config() -> Dict[str, Any]:
     return {
         "ok": True,
@@ -324,7 +324,7 @@ def auth_config() -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/auth/login")
+@app.post("/api/auth/login")
 def auth_login(req: AuthLoginRequest, response: Response) -> Dict[str, Any]:
     if not SETTINGS.auth_enabled:
         raise HTTPException(
@@ -365,14 +365,14 @@ def auth_login(req: AuthLoginRequest, response: Response) -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/auth/logout")
+@app.post("/api/auth/logout")
 def auth_logout(response: Response) -> Dict[str, Any]:
     if SETTINGS.auth_cookie_name:
         response.delete_cookie(key=str(SETTINGS.auth_cookie_name), path="/")
     return {"ok": True}
 
 
-@app.get("/v1/auth/me")
+@app.get("/api/auth/me")
 def auth_me(request: Request) -> Dict[str, Any]:
     info = _require_jwt_auth(request)
     return {
@@ -435,7 +435,7 @@ _CAPABILITIES: List[Dict[str, Any]] = [
 ]
 
 
-@app.get("/v1/health")
+@app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {
         "ok": True,
@@ -447,7 +447,7 @@ def health() -> Dict[str, Any]:
     }
 
 
-@app.get("/v1/ddp/patterns")
+@app.get("/api/ddp/patterns")
 def ddp_patterns() -> Dict[str, Any]:
     factory = PatternFactory(
         led_count=SETTINGS.pixel_count, geometry=GEOM, segment_layout=None
@@ -459,12 +459,12 @@ def ddp_patterns() -> Dict[str, Any]:
     }
 
 
-@app.get("/v1/ddp/status")
+@app.get("/api/ddp/status")
 def ddp_status() -> Dict[str, Any]:
     return {"ok": True, "status": STREAMER.status().__dict__}
 
 
-@app.post("/v1/ddp/start")
+@app.post("/api/ddp/start")
 def ddp_start(req: DDPStartRequest) -> Dict[str, Any]:
     try:
         params = dict(req.params or {})
@@ -484,13 +484,13 @@ def ddp_start(req: DDPStartRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/v1/ddp/stop")
+@app.post("/api/ddp/stop")
 def ddp_stop() -> Dict[str, Any]:
     st = STREAMER.stop()
     return {"ok": True, "status": st.__dict__}
 
 
-@app.get("/v1/a2a/card")
+@app.get("/api/a2a/card")
 def a2a_card(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
     return {
         "ok": True,
@@ -500,7 +500,7 @@ def a2a_card(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
             "role": SETTINGS.agent_role,
             "version": app.version,
             "controller_kind": SETTINGS.controller_kind,
-            "endpoints": {"card": "/v1/a2a/card", "invoke": "/v1/a2a/invoke"},
+            "endpoints": {"card": "/api/a2a/card", "invoke": "/api/a2a/invoke"},
             "pixel": {
                 "protocol": SETTINGS.pixel_protocol,
                 "host": SETTINGS.pixel_host,
@@ -514,7 +514,7 @@ def a2a_card(_: None = Depends(_require_a2a_auth)) -> Dict[str, Any]:
     }
 
 
-@app.post("/v1/a2a/invoke")
+@app.post("/api/a2a/invoke")
 def a2a_invoke(
     req: A2AInvokeRequest, _: None = Depends(_require_a2a_auth)
 ) -> Dict[str, Any]:

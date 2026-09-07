@@ -94,7 +94,7 @@ class GenerateSequenceRequest(BaseModel):
     )
     beats_file: Optional[str] = Field(
         default=None,
-        description="Optional: beats timeline JSON under DATA_DIR (from /v1/audio/analyze or /v1/xlights/import_sequence). "
+        description="Optional: beats timeline JSON under DATA_DIR (from /api/audio/analyze or /api/xlights/import_sequence). "
         "If set, step durations are derived from the beat grid instead of fixed step_s.",
     )
     beats_per_step: int = Field(
@@ -437,8 +437,8 @@ class FPPExportEventScriptRequest(BaseModel):
         description="Optional: load coordinator URL from a show config file under DATA_DIR.",
     )
     path: str = Field(
-        "/v1/fleet/sequences/start",
-        description="Coordinator path to call (e.g. /v1/fleet/sequences/start).",
+        "/api/fleet/sequences/start",
+        description="Coordinator path to call (e.g. /api/fleet/sequences/start).",
     )
     payload: Dict[str, Any] = Field(
         default_factory=dict, description="JSON payload to send in the POST."

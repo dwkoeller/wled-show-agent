@@ -123,7 +123,7 @@ class PrometheusMetricsMiddleware(BaseHTTPMiddleware):
         app: ASGIApp,
         *,
         registry: PrometheusMetrics = REGISTRY,
-        skip_paths: Tuple[str, ...] = ("/metrics",),
+        skip_paths: Tuple[str, ...] = ("/api/prometheus",),
     ) -> None:
         super().__init__(app)
         self._registry = registry

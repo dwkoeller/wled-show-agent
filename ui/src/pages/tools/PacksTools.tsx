@@ -53,7 +53,7 @@ export function PacksTools() {
     setError(null);
     setLastResult(null);
     try {
-      const url = new URL("/v1/packs/ingest", window.location.origin);
+      const url = new URL("/api/packs/ingest", window.location.origin);
       url.searchParams.set("dest_dir", into);
       if (overwrite) url.searchParams.set("overwrite", "true");
 

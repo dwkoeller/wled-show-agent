@@ -625,7 +625,7 @@ async def export_fleet_sequence_start_script(
     }
     script = render_http_post_script(
         coordinator_base_url=coord,
-        path="/v1/fleet/sequences/start",
+        path="/api/fleet/sequences/start",
         payload=payload,
         a2a_api_key=state.settings.a2a_api_key if req.include_a2a_key else None,
     )
@@ -650,7 +650,7 @@ async def export_fleet_sequence_start_script(
                 bytes_written=int(res.bytes_written),
                 payload={
                     "coordinator_base_url": coord,
-                    "path": "/v1/fleet/sequences/start",
+                    "path": "/api/fleet/sequences/start",
                     "targets": req.targets,
                     "include_self": bool(req.include_self),
                 },
@@ -691,7 +691,7 @@ async def export_fleet_stop_all_script(
     }
     script = render_http_post_script(
         coordinator_base_url=coord,
-        path="/v1/fleet/stop_all",
+        path="/api/fleet/stop_all",
         payload=payload,
         a2a_api_key=state.settings.a2a_api_key if req.include_a2a_key else None,
     )
@@ -716,7 +716,7 @@ async def export_fleet_stop_all_script(
                 bytes_written=int(res.bytes_written),
                 payload={
                     "coordinator_base_url": coord,
-                    "path": "/v1/fleet/stop_all",
+                    "path": "/api/fleet/stop_all",
                     "targets": req.targets,
                     "include_self": bool(req.include_self),
                 },

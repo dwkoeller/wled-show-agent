@@ -49,7 +49,7 @@ export function XlightsTools() {
   const refreshFiles = async () => {
     try {
       const res = await api<{ ok: boolean; files: string[] }>(
-        "/v1/files/list?dir=xlights&recursive=true&limit=500",
+        "/api/files/list?dir=xlights&recursive=true&limit=500",
         { method: "GET" },
       );
       setFiles(res.files || []);
@@ -159,7 +159,7 @@ export function XlightsTools() {
             startIcon={<UploadFileIcon />}
             disabled={busy}
             onClick={() =>
-              submitJob("/v1/jobs/xlights/import_project", {
+              submitJob("/api/jobs/xlights/import_project", {
                 project_dir: projectDir,
                 out_file: projectOut,
                 show_name: projectName,
@@ -214,7 +214,7 @@ export function XlightsTools() {
             startIcon={<UploadFileIcon />}
             disabled={busy}
             onClick={() =>
-              submitJob("/v1/jobs/xlights/import_networks", {
+              submitJob("/api/jobs/xlights/import_networks", {
                 networks_file: networksFile,
                 out_file: networksOut,
                 show_name: networksName,
@@ -265,7 +265,7 @@ export function XlightsTools() {
             startIcon={<UploadFileIcon />}
             disabled={busy}
             onClick={() =>
-              submitJob("/v1/jobs/xlights/import_sequence", {
+              submitJob("/api/jobs/xlights/import_sequence", {
                 xsq_file: xsqFile,
                 timing_track: timingTrack || null,
                 out_file: xsqOut,

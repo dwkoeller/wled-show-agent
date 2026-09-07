@@ -116,7 +116,7 @@ export function LedfxTools() {
     try {
       const out: any = {};
       try {
-        out.status = await api("/v1/ledfx/status", { method: "GET" });
+        out.status = await api("/api/ledfx/status", { method: "GET" });
       } catch (e) {
         out.status = {
           ok: false,
@@ -125,7 +125,7 @@ export function LedfxTools() {
       }
       try {
         const res = await api<{ ok: boolean; virtuals: LedfxItem[] }>(
-          "/v1/ledfx/virtuals",
+          "/api/ledfx/virtuals",
           { method: "GET" },
         );
         setVirtuals(res.virtuals || []);
@@ -139,7 +139,7 @@ export function LedfxTools() {
       }
       try {
         const res = await api<{ ok: boolean; scenes: LedfxItem[] }>(
-          "/v1/ledfx/scenes",
+          "/api/ledfx/scenes",
           { method: "GET" },
         );
         setScenes(res.scenes || []);
@@ -153,7 +153,7 @@ export function LedfxTools() {
       }
       try {
         const res = await api<{ ok: boolean; effects: LedfxItem[] }>(
-          "/v1/ledfx/effects",
+          "/api/ledfx/effects",
           { method: "GET" },
         );
         setEffects(res.effects || []);
@@ -167,7 +167,7 @@ export function LedfxTools() {
       }
       try {
         const res = await api<{ ok: boolean; last_applied: Record<string, any> }>(
-          "/v1/meta/last_applied",
+          "/api/meta/last_applied",
           { method: "GET" },
         );
         const all = res.last_applied || {};
@@ -187,7 +187,7 @@ export function LedfxTools() {
         };
       }
       try {
-        const res = await api<FleetSummary>("/v1/ledfx/fleet", { method: "GET" });
+        const res = await api<FleetSummary>("/api/ledfx/fleet", { method: "GET" });
         setFleetSummary(res);
         out.fleet = res;
       } catch (e) {
@@ -219,7 +219,7 @@ export function LedfxTools() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api("/v1/ledfx/scene/activate", {
+      const res = await api("/api/ledfx/scene/activate", {
         method: "POST",
         json: { scene_id: sceneId },
       });
@@ -236,7 +236,7 @@ export function LedfxTools() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api("/v1/ledfx/scene/deactivate", {
+      const res = await api("/api/ledfx/scene/deactivate", {
         method: "POST",
         json: { scene_id: sceneId },
       });
@@ -257,7 +257,7 @@ export function LedfxTools() {
       if (effectConfig.trim()) {
         cfg = JSON.parse(effectConfig);
       }
-      const res = await api("/v1/ledfx/virtual/effect", {
+      const res = await api("/api/ledfx/virtual/effect", {
         method: "POST",
         json: {
           virtual_id: virtualId.trim() ? virtualId.trim() : null,
@@ -282,7 +282,7 @@ export function LedfxTools() {
       if (Number.isNaN(value)) {
         throw new Error("Brightness must be a number");
       }
-      const res = await api("/v1/ledfx/virtual/brightness", {
+      const res = await api("/api/ledfx/virtual/brightness", {
         method: "POST",
         json: {
           virtual_id: virtualId.trim() ? virtualId.trim() : null,
@@ -306,7 +306,7 @@ export function LedfxTools() {
       if (reqBody.trim()) {
         payload = JSON.parse(reqBody);
       }
-      const res = await api("/v1/ledfx/request", {
+      const res = await api("/api/ledfx/request", {
         method: "POST",
         json: {
           method: reqMethod,

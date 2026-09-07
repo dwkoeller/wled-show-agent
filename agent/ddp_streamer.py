@@ -47,6 +47,7 @@ class DDPStreamer:
         ddp_cfg: DDPConfig,
         fps_default: float = 20.0,
         fps_max: float = 45.0,
+        max_bri: int = 255,
         drop_late_frames: bool = True,
         max_lag_s: float = 0.25,
         segment_ids: Optional[list[int]] = None,
@@ -58,6 +59,7 @@ class DDPStreamer:
         self.ddp_cfg = ddp_cfg
         self.fps_default = fps_default
         self.fps_max = fps_max
+        self.max_bri = max(0, min(255, int(max_bri)))
         self.drop_late_frames = bool(drop_late_frames)
         self.max_lag_s = max(0.0, float(max_lag_s))
 
@@ -66,6 +68,7 @@ class DDPStreamer:
         self._cpu_pool = cpu_pool
 
         self._lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._status = StreamStatus(
@@ -95,6 +98,10 @@ class DDPStreamer:
             pass
 
     async def stop(self) -> StreamStatus:
+        async with self._lifecycle_lock:
+            return await self._stop_stream()
+
+    async def _stop_stream(self) -> StreamStatus:
         async with self._lock:
             if not self._status.running:
                 return StreamStatus(**self._status.__dict__)
@@ -117,7 +124,11 @@ class DDPStreamer:
         async with self._lock:
             return StreamStatus(**self._status.__dict__)
 
-    async def start(
+    async def start(self, **kwargs) -> StreamStatus:
+        async with self._lifecycle_lock:
+            return await self._start_stream(**kwargs)
+
+    async def _start_stream(
         self,
         *,
         pattern: str,
@@ -129,10 +140,10 @@ class DDPStreamer:
         fps_val = float(fps if fps is not None else self.fps_default)
         fps_val = max(1.0, min(self.fps_max, fps_val))
         duration_s = max(0.1, float(duration_s))
-        brightness = max(0, min(255, int(brightness)))
+        brightness = max(0, min(self.max_bri, int(brightness)))
 
         # Stop any existing stream
-        await self.stop()
+        await self._stop_stream()
 
         # Build factory + pattern instance.
         layout = None

@@ -405,9 +405,9 @@ async def _maybe_upsert_metadata(
         except Exception:
             raw = ""
         kind = "custom"
-        if "/v1/fleet/sequences/start" in raw:
+        if "/api/fleet/sequences/start" in raw:
             kind = "fleet_sequence_start"
-        elif "/v1/fleet/stop_all" in raw:
+        elif "/api/fleet/stop_all" in raw:
             kind = "fleet_stop_all"
         try:
             stat_res = await aio_os.stat(str(abs_path))
@@ -525,7 +525,7 @@ async def files_list(
     glob: str = "*",
     recursive: bool = False,
     limit: int = 500,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -610,7 +610,7 @@ async def files_list(
 
 async def files_download(
     path: str,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> FileResponse:
@@ -759,7 +759,7 @@ async def files_upload_multipart(
     dir: str = Form(...),
     filename: str | None = Form(default=None),
     overwrite: bool = Form(default=False),
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -878,7 +878,7 @@ async def files_upload_multipart(
 
 async def files_delete(
     path: str,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -940,7 +940,7 @@ async def files_delete(
 async def files_delete_dir(
     dir: str,
     recursive: bool = True,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:

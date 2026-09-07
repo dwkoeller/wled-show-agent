@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("shows TOTP field when totp is enabled", async ({ page }) => {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -16,7 +16,7 @@ test("shows TOTP field when totp is enabled", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({
       status: 401,
       json: { ok: false, error: "unauthorized" },
@@ -29,7 +29,7 @@ test("shows TOTP field when totp is enabled", async ({ page }) => {
 });
 
 test("hides TOTP field when totp is disabled", async ({ page }) => {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -44,7 +44,7 @@ test("hides TOTP field when totp is disabled", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({
       status: 401,
       json: { ok: false, error: "unauthorized" },

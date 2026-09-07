@@ -382,20 +382,19 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
 
     # Public endpoints.
     if (
-        path == "/"
-        or path == "/livez"
-        or path == "/readyz"
-        or path.startswith("/ui")
-        or path.startswith("/v1/health")
-        or path.startswith("/v1/auth/config")
-        or path.startswith("/v1/auth/login")
-        or path.startswith("/v1/auth/logout")
-        or path == "/v1/auth/password/reset"
+        path == "/api/"
+        or path == "/api/livez"
+        or path == "/api/readyz"
+        or path.startswith("/api/health")
+        or path.startswith("/api/auth/config")
+        or path.startswith("/api/auth/login")
+        or path.startswith("/api/auth/logout")
+        or path == "/api/auth/password/reset"
     ):
         return await call_next(request)
 
     # Allow Prometheus scraping based on config.
-    if path == "/metrics":
+    if path == "/api/prometheus":
         if settings.metrics_public:
             return await call_next(request)
         tok = (settings.metrics_scrape_token or "").strip()
@@ -435,7 +434,7 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
                 "HEAD",
                 "OPTIONS",
             }:
-                if request.url.path == "/v1/auth/password/change":
+                if request.url.path == "/api/auth/password/change":
                     return await call_next(request)
                 return JSONResponse(
                     status_code=403,
@@ -895,7 +894,7 @@ async def auth_sessions(
     active_only: bool = False,
     limit: int = 200,
     offset: int = 0,
-    request: Request | None = None,
+    request: Request = None,
     _: Dict[str, Any] = Depends(require_admin),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -960,7 +959,7 @@ async def auth_login_attempts(
     locked_only: bool = False,
     limit: int = 200,
     offset: int = 0,
-    request: Request | None = None,
+    request: Request = None,
     _: Dict[str, Any] = Depends(require_admin),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -1029,7 +1028,7 @@ async def auth_api_keys(
     active_only: bool = False,
     limit: int = 200,
     offset: int = 0,
-    request: Request | None = None,
+    request: Request = None,
     _: Dict[str, Any] = Depends(require_admin),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:

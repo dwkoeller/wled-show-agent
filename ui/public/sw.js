@@ -1,5 +1,5 @@
 /* Minimal service worker for installability + basic offline caching of the UI shell. */
-const CACHE = "wsa-ui-v1";
+const CACHE = "wsa-root-v2";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -22,7 +22,7 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)),
+          keys.filter((k) => k.startsWith("wsa-") && k !== CACHE).map((k) => caches.delete(k)),
         ),
       )
       .then(() => self.clients.claim()),
@@ -37,14 +37,12 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Never cache API responses.
-  if (url.pathname.startsWith("/v1/")) return;
+  if (url.pathname.startsWith("/api/")) return;
 
   // App shell navigation fallback.
   if (req.mode === "navigate") {
     event.respondWith(
-      caches
-        .match("./index.html")
-        .then((cached) => cached || fetch(req).catch(() => cached)),
+      fetch(req).catch(() => caches.match("./index.html")),
     );
     return;
   }

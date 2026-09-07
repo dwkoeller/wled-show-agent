@@ -147,7 +147,7 @@ export function JobsPage() {
     try {
       const lim = Math.max(1, Math.min(1000, parseInt(jobLimit, 10) || 100));
       const res = await api<{ ok: boolean; jobs: Job[] }>(
-        `/v1/jobs?limit=${lim}`,
+        `/api/jobs?limit=${lim}`,
         { method: "GET" },
       );
       const m: Record<string, Job> = {};
@@ -161,7 +161,7 @@ export function JobsPage() {
   const fetchRetention = async () => {
     setRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/jobs/retention", {
+      const res = await api<RetentionRes>("/api/jobs/retention", {
         method: "GET",
       });
       setRetention(res);
@@ -182,8 +182,8 @@ export function JobsPage() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/jobs/retention?${params.toString()}`
-          : "/v1/jobs/retention";
+          ? `/api/jobs/retention?${params.toString()}`
+          : "/api/jobs/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -199,7 +199,7 @@ export function JobsPage() {
 
   const cancel = async (jobId: string) => {
     try {
-      await api(`/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      await api(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST",
         json: {},
       });
@@ -608,7 +608,7 @@ export function JobsPage() {
               {outFile ? (
                 <Button
                   component="a"
-                  href={`/v1/files/download?path=${encodeURIComponent(outFile)}`}
+                  href={`/api/files/download?path=${encodeURIComponent(outFile)}`}
                   target="_blank"
                   rel="noreferrer"
                 >

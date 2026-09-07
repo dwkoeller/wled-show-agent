@@ -7,4 +7,4 @@ from services import command_service
 
 router = APIRouter()
 
-router.add_api_route("/v1/command", command_service.command, methods=["POST"])
+router.add_api_route("/api/command", command_service.command, methods=["POST"])

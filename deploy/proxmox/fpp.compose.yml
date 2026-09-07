@@ -1,0 +1,24 @@
+services:
+  fpp:
+    image: falconchristmas/fpp:10.0
+    hostname: falcon-player
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TZ: America/New_York
+      FPP_DOCKER_IP: ${FPP_IP:?Set FPP_IP to the Falcon Player LXC address}
+    volumes:
+      - ./media:/home/fpp/media
+    cap_add:
+      - SYS_NICE
+      - SYS_PTRACE
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 1024
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/api/fppd/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s

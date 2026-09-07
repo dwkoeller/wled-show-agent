@@ -61,7 +61,7 @@ export function AudioWaveformDialog(props: {
       if (!beatsKey) return [];
       const params = new URLSearchParams();
       params.set("path", beatsKey);
-      const resp = await fetch(`/v1/files/download?${params.toString()}`, {
+      const resp = await fetch(`/api/files/download?${params.toString()}`, {
         credentials: "include",
       });
       if (!resp.ok) return [];
@@ -73,7 +73,7 @@ export function AudioWaveformDialog(props: {
       const params = new URLSearchParams();
       params.set("file", audioKey);
       params.set("points", String(Math.min(800, CANVAS_WIDTH)));
-      const resp = await fetch(`/v1/audio/waveform?${params.toString()}`, {
+      const resp = await fetch(`/api/audio/waveform?${params.toString()}`, {
         credentials: "include",
       });
       if (!resp.ok) {

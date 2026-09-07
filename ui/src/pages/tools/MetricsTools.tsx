@@ -195,7 +195,7 @@ export function MetricsTools() {
     let active = true;
     const fetchMetrics = async () => {
       try {
-        const res = await api<MetricsRes>("/v1/metrics", { method: "GET" });
+        const res = await api<MetricsRes>("/api/metrics", { method: "GET" });
         if (!active) return;
         setMetrics(res);
         setError(null);
@@ -239,7 +239,7 @@ export function MetricsTools() {
         const since = Math.floor(Date.now() / 1000 - hours * 3600);
         q.set("since", String(since));
       }
-      const res = await api<MetricsHistoryRes>(`/v1/metrics/history?${q}`, {
+      const res = await api<MetricsHistoryRes>(`/api/metrics/history?${q}`, {
         method: "GET",
       });
       setHistorySamples(res.samples ?? []);
@@ -254,7 +254,7 @@ export function MetricsTools() {
     setRetentionError(null);
     try {
       const res = await api<MetricsRetentionStatus>(
-        "/v1/metrics/history/retention",
+        "/api/metrics/history/retention",
         { method: "GET" },
       );
       setRetentionStatus(res);
@@ -275,8 +275,8 @@ export function MetricsTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/metrics/history/retention?${params.toString()}`
-          : "/v1/metrics/history/retention";
+          ? `/api/metrics/history/retention?${params.toString()}`
+          : "/api/metrics/history/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -306,7 +306,7 @@ export function MetricsTools() {
         const since = Math.floor(Date.now() / 1000 - hours * 3600);
         q.set("since", String(since));
       }
-      const resp = await fetch(`/v1/metrics/history/export?${q.toString()}`, {
+      const resp = await fetch(`/api/metrics/history/export?${q.toString()}`, {
         method: "GET",
         credentials: "include",
       });
@@ -376,7 +376,7 @@ export function MetricsTools() {
             <Typography variant="h6">Metrics</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Live snapshots from <code>/v1/metrics</code> (updated every 5s).
+            Live snapshots from <code>/api/metrics</code> (updated every 5s).
           </Typography>
           {error ? (
             <Alert severity="warning" sx={{ mt: 2 }}>
@@ -478,7 +478,7 @@ export function MetricsTools() {
             <Typography variant="h6">Metrics Charts</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            SQL-backed samples from <code>/v1/metrics/history</code> for charts.
+            SQL-backed samples from <code>/api/metrics/history</code> for charts.
           </Typography>
           <Stack spacing={2} sx={{ mt: 2 }}>
             <TextField

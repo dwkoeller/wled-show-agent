@@ -287,7 +287,7 @@ class FleetOrchestrationService:
                     await fleet_service._peer_post_json(  # type: ignore[attr-defined]
                         state=self._state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s_val,
                     )

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("orchestration builder can generate a look payload", async ({ page }) => {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -16,34 +16,34 @@ test("orchestration builder can generate a look payload", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: { ok: true, user: { username: "tester" } } });
   });
-  await page.route("**/v1/orchestration/status", async (route) => {
+  await page.route("**/api/orchestration/status", async (route) => {
     await route.fulfill({ json: { ok: true } });
   });
-  await page.route("**/v1/fleet/orchestration/status", async (route) => {
+  await page.route("**/api/fleet/orchestration/status", async (route) => {
     await route.fulfill({ json: { ok: true } });
   });
-  await page.route("**/v1/sequences/list", async (route) => {
+  await page.route("**/api/sequences/list", async (route) => {
     await route.fulfill({ json: { ok: true, files: [] } });
   });
-  await page.route("**/v1/ddp/patterns", async (route) => {
+  await page.route("**/api/ddp/patterns", async (route) => {
     await route.fulfill({ json: { ok: true, patterns: [] } });
   });
-  await page.route("**/v1/wled/presets", async (route) => {
+  await page.route("**/api/wled/presets", async (route) => {
     await route.fulfill({ json: { ok: true, presets: {} } });
   });
-  await page.route("**/v1/wled/effects", async (route) => {
+  await page.route("**/api/wled/effects", async (route) => {
     await route.fulfill({ json: { ok: true, effects: ["Solid", "Blink"] } });
   });
-  await page.route("**/v1/wled/palettes", async (route) => {
+  await page.route("**/api/wled/palettes", async (route) => {
     await route.fulfill({ json: { ok: true, palettes: ["Default", "Rainbow"] } });
   });
-  await page.route("**/v1/meta/last_applied", async (route) => {
+  await page.route("**/api/meta/last_applied", async (route) => {
     await route.fulfill({ json: { ok: true } });
   });
-  await page.route("**/v1/orchestration/presets**", async (route) => {
+  await page.route("**/api/orchestration/presets**", async (route) => {
     await route.fulfill({ json: { ok: true, presets: [] } });
   });
 

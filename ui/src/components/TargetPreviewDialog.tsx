@@ -61,7 +61,7 @@ export function TargetPreviewDialog(props: {
     setBusy(true);
     setError(null);
     setData(null);
-    void api<FleetResolveResponse>("/v1/fleet/resolve", {
+    void api<FleetResolveResponse>("/api/fleet/resolve", {
       method: "POST",
       json: { targets: targets ?? null },
     })

@@ -103,7 +103,7 @@ export function FilesTools() {
       q.set("recursive", recursive ? "true" : "false");
       q.set("limit", "500");
       const res = await api<{ ok: boolean; files: string[] }>(
-        `/v1/files/list?${q.toString()}`,
+        `/api/files/list?${q.toString()}`,
         { method: "GET" },
       );
       setFiles(res.files || []);
@@ -148,7 +148,7 @@ export function FilesTools() {
         form.append("overwrite", overwrite ? "true" : "false");
 
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/v1/files/upload");
+        xhr.open("POST", "/api/files/upload");
         xhr.withCredentials = true;
         const csrf = csrfHeaders("POST");
         for (const [key, value] of Object.entries(csrf)) {
@@ -205,7 +205,7 @@ export function FilesTools() {
     setBusy(true);
     setError(null);
     try {
-      await api(`/v1/files/delete?path=${encodeURIComponent(path)}`, {
+      await api(`/api/files/delete?path=${encodeURIComponent(path)}`, {
         method: "DELETE",
       });
       await refresh();
@@ -230,7 +230,7 @@ export function FilesTools() {
       const q = new URLSearchParams();
       q.set("dir", target);
       q.set("recursive", deleteDirRecursive ? "true" : "false");
-      await api(`/v1/files/delete_dir?${q.toString()}`, { method: "DELETE" });
+      await api(`/api/files/delete_dir?${q.toString()}`, { method: "DELETE" });
       setDeleteDir("");
       await refresh();
     } catch (e) {
@@ -249,7 +249,7 @@ export function FilesTools() {
     try {
       for (let i = 0; i < files.length; i += 1) {
         const f = files[i];
-        await api(`/v1/files/delete?path=${encodeURIComponent(f)}`, {
+        await api(`/api/files/delete?path=${encodeURIComponent(f)}`, {
           method: "DELETE",
         });
         setBulkProgress(Math.round(((i + 1) / files.length) * 100));
@@ -490,7 +490,7 @@ export function FilesTools() {
                     size="small"
                     startIcon={<DownloadIcon />}
                     component="a"
-                    href={`/v1/files/download?path=${encodeURIComponent(f)}`}
+                    href={`/api/files/download?path=${encodeURIComponent(f)}`}
                     target="_blank"
                     rel="noreferrer"
                   >

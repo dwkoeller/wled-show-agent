@@ -285,7 +285,7 @@ export function AuditTools() {
   const fetchRetention = async () => {
     setRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/audit/retention", {
+      const res = await api<RetentionRes>("/api/audit/retention", {
         method: "GET",
       });
       setRetention(res);
@@ -306,8 +306,8 @@ export function AuditTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/audit/retention?${params.toString()}`
-          : "/v1/audit/retention";
+          ? `/api/audit/retention?${params.toString()}`
+          : "/api/audit/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -325,7 +325,7 @@ export function AuditTools() {
   const fetchOrchestrationRetention = async () => {
     setOrchestrationRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/orchestration/retention", {
+      const res = await api<RetentionRes>("/api/orchestration/retention", {
         method: "GET",
       });
       setOrchestrationRetention(res);
@@ -346,8 +346,8 @@ export function AuditTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/orchestration/retention?${params.toString()}`
-          : "/v1/orchestration/retention";
+          ? `/api/orchestration/retention?${params.toString()}`
+          : "/api/orchestration/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -375,9 +375,9 @@ export function AuditTools() {
       const qRuns = buildRunQuery(runLim, runOff);
 
       const [logsRes, runsRes] = await Promise.all([
-        api<AuditLogsRes>(`/v1/audit/logs?${q.toString()}`, { method: "GET" }),
+        api<AuditLogsRes>(`/api/audit/logs?${q.toString()}`, { method: "GET" }),
         api<OrchestrationRunsRes>(
-          `/v1/orchestration/runs?${qRuns.toString()}`,
+          `/api/orchestration/runs?${qRuns.toString()}`,
           { method: "GET" },
         ),
       ]);
@@ -438,7 +438,7 @@ export function AuditTools() {
     const q = buildLogQuery(Math.min(lim, 20000));
     q.set("format", format);
     const filename = format === "json" ? "audit_logs.json" : "audit_logs.csv";
-    await downloadExport(`/v1/audit/logs/export?${q.toString()}`, filename);
+    await downloadExport(`/api/audit/logs/export?${q.toString()}`, filename);
   };
 
   const exportRuns = async (format: "csv" | "json") => {
@@ -447,7 +447,7 @@ export function AuditTools() {
     q.set("format", format);
     const filename =
       format === "json" ? "orchestration_runs.json" : "orchestration_runs.csv";
-    await downloadExport(`/v1/orchestration/runs/export?${q.toString()}`, filename);
+    await downloadExport(`/api/orchestration/runs/export?${q.toString()}`, filename);
   };
 
   const exportRunSteps = async (runId: string, format: "csv" | "json") => {
@@ -464,7 +464,7 @@ export function AuditTools() {
         ? `orchestration_steps_${runId}.json`
         : `orchestration_steps_${runId}.csv`;
     await downloadExport(
-      `/v1/orchestration/runs/${encodeURIComponent(runId)}/steps/export?${q.toString()}`,
+      `/api/orchestration/runs/${encodeURIComponent(runId)}/steps/export?${q.toString()}`,
       filename,
     );
   };
@@ -483,7 +483,7 @@ export function AuditTools() {
         ? `orchestration_peers_${runId}.json`
         : `orchestration_peers_${runId}.csv`;
     await downloadExport(
-      `/v1/orchestration/runs/${encodeURIComponent(runId)}/peers/export?${q.toString()}`,
+      `/api/orchestration/runs/${encodeURIComponent(runId)}/peers/export?${q.toString()}`,
       filename,
     );
   };
@@ -525,7 +525,7 @@ export function AuditTools() {
       if (opts?.stepsOffset != null) setDetailStepsOffset(String(stepsOffset));
       if (opts?.peersOffset != null) setDetailPeersOffset(String(peersOffset));
       const detail = await api<OrchestrationRunDetailRes>(
-        `/v1/orchestration/runs/${encodeURIComponent(runId)}?${q.toString()}`,
+        `/api/orchestration/runs/${encodeURIComponent(runId)}?${q.toString()}`,
         { method: "GET" },
       );
       setRunDetails((prev) => ({ ...prev, [runId]: detail }));
@@ -630,7 +630,7 @@ export function AuditTools() {
             <Typography variant="h6">Audit Log</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary">
-            Auth/admin actions from <code>/v1/audit/logs</code>.
+            Auth/admin actions from <code>/api/audit/logs</code>.
           </Typography>
           <Stack spacing={2} sx={{ mt: 2 }}>
             <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>

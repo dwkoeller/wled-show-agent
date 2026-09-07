@@ -183,7 +183,7 @@ export function SchedulerTools() {
   const fetchRetention = async () => {
     setRetentionError(null);
     try {
-      const res = await api<RetentionRes>("/v1/scheduler/retention", {
+      const res = await api<RetentionRes>("/api/scheduler/retention", {
         method: "GET",
       });
       setRetention(res);
@@ -204,8 +204,8 @@ export function SchedulerTools() {
       if (Number.isFinite(days) && days > 0) params.set("max_days", String(days));
       const url =
         params.toString().length > 0
-          ? `/v1/scheduler/retention?${params.toString()}`
-          : "/v1/scheduler/retention";
+          ? `/api/scheduler/retention?${params.toString()}`
+          : "/api/scheduler/retention";
       const res = await api<{ ok?: boolean; result?: Record<string, unknown> }>(
         url,
         { method: "POST", json: {} },
@@ -223,7 +223,7 @@ export function SchedulerTools() {
     setError(null);
     setBusy(true);
     try {
-      const st = await api<SchedulerStatus>("/v1/scheduler/status", {
+      const st = await api<SchedulerStatus>("/api/scheduler/status", {
         method: "GET",
       });
       setStatus(st);
@@ -233,7 +233,7 @@ export function SchedulerTools() {
         if (opts?.eventsOffset != null) setEventsOffset(String(off));
         const q = buildEventsQuery(lim, off);
         const ev = await api<SchedulerEventsRes>(
-          `/v1/scheduler/events?${q.toString()}`,
+          `/api/scheduler/events?${q.toString()}`,
           { method: "GET" },
         );
         setEvents(ev.events || []);
@@ -257,7 +257,7 @@ export function SchedulerTools() {
   const refreshSequences = async () => {
     try {
       const res = await api<{ ok: boolean; files: string[] }>(
-        "/v1/sequences/list",
+        "/api/sequences/list",
         {
           method: "GET",
         },
@@ -303,7 +303,7 @@ export function SchedulerTools() {
     setError(null);
     setBusy(true);
     try {
-      await api("/v1/scheduler/config", {
+      await api("/api/scheduler/config", {
         method: "POST",
         json: {
           enabled: Boolean(enabled),
@@ -336,7 +336,7 @@ export function SchedulerTools() {
     setError(null);
     setBusy(true);
     try {
-      await api("/v1/scheduler/start", { method: "POST", json: {} });
+      await api("/api/scheduler/start", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -349,7 +349,7 @@ export function SchedulerTools() {
     setError(null);
     setBusy(true);
     try {
-      await api("/v1/scheduler/stop", { method: "POST", json: {} });
+      await api("/api/scheduler/stop", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -362,7 +362,7 @@ export function SchedulerTools() {
     setError(null);
     setBusy(true);
     try {
-      await api("/v1/scheduler/run_once", { method: "POST", json: {} });
+      await api("/api/scheduler/run_once", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -408,7 +408,7 @@ export function SchedulerTools() {
     q.set("format", format);
     const filename =
       format === "json" ? "scheduler_events.json" : "scheduler_events.csv";
-    await downloadExport(`/v1/scheduler/events/export?${q.toString()}`, filename);
+    await downloadExport(`/api/scheduler/events/export?${q.toString()}`, filename);
   };
 
   const pageEvents = async (dir: "prev" | "next") => {

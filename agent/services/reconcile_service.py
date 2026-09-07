@@ -695,9 +695,9 @@ def _scan_fpp_scripts(root: Path, *, limit: int) -> List[_FppScriptMeta]:
             payload: Dict[str, Any] = {}
             try:
                 raw = p.read_text(encoding="utf-8", errors="ignore")
-                if "/v1/fleet/sequences/start" in raw:
+                if "/api/fleet/sequences/start" in raw:
                     kind = "fleet_sequence_start"
-                elif "/v1/fleet/stop_all" in raw:
+                elif "/api/fleet/stop_all" in raw:
                     kind = "fleet_stop_all"
             except Exception:
                 pass

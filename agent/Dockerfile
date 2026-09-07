@@ -1,4 +1,13 @@
+FROM node:24-bookworm-slim AS codex
+ARG CODEX_VERSION=0.153.4
+RUN npm install -g @openai/codex@${CODEX_VERSION} \
+ && mkdir /codex-runtime \
+ && find /usr/local/lib/node_modules -type f -path '*/bin/codex*' -exec cp {} /codex-runtime/ \; \
+ && test -x /codex-runtime/codex
+
 FROM python:3.14-slim
+
+COPY --from=codex /codex-runtime/ /usr/local/bin/
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1

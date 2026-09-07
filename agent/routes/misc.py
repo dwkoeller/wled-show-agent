@@ -7,4 +7,4 @@ from services import misc_service
 
 router = APIRouter()
 
-router.add_api_route("/v1/go_crazy", misc_service.go_crazy, methods=["POST"])
+router.add_api_route("/api/go_crazy", misc_service.go_crazy, methods=["POST"])

@@ -48,7 +48,7 @@ export function SequenceTools() {
         ok: boolean;
         packs: string[];
         latest: string | null;
-      }>("/v1/looks/packs", { method: "GET" });
+      }>("/api/looks/packs", { method: "GET" });
       const all = res.packs || [];
       setPacks(all);
       setPackFile((prev) => prev || res.latest || all[all.length - 1] || "");
@@ -57,7 +57,7 @@ export function SequenceTools() {
     }
     try {
       const res = await api<{ ok: boolean; files: string[] }>(
-        "/v1/files/list?dir=audio&recursive=true&glob=*.json&limit=200",
+        "/api/files/list?dir=audio&recursive=true&glob=*.json&limit=200",
         { method: "GET" },
       );
       const all = (res.files || []).filter((f) =>
@@ -84,7 +84,7 @@ export function SequenceTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/jobs/sequences/generate", {
+      await api("/api/jobs/sequences/generate", {
         method: "POST",
         json: {
           name,

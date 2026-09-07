@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("fleet tools load with empty data", async ({ page }) => {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -16,10 +16,10 @@ test("fleet tools load with empty data", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: { ok: true, user: { username: "tester" } } });
   });
-  await page.route("**/v1/fleet/status", async (route) => {
+  await page.route("**/api/fleet/status", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -30,17 +30,17 @@ test("fleet tools load with empty data", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/fleet/history**", async (route) => {
+  await page.route("**/api/fleet/history**", async (route) => {
     await route.fulfill({
       json: { ok: true, history: [], count: 0, limit: 100, offset: 0 },
     });
   });
-  await page.route("**/v1/orchestration/runs**", async (route) => {
+  await page.route("**/api/orchestration/runs**", async (route) => {
     await route.fulfill({
       json: { ok: true, runs: [], count: 0, limit: 100, offset: 0 },
     });
   });
-  await page.route("**/v1/fleet/health", async (route) => {
+  await page.route("**/api/fleet/health", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -56,7 +56,7 @@ test("fleet tools load with empty data", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/ledfx/fleet", async (route) => {
+  await page.route("**/api/ledfx/fleet", async (route) => {
     await route.fulfill({
       json: { ok: true, cached: false, summary: { total: 0 }, agents: {} },
     });

@@ -21,7 +21,7 @@ async def test_metrics_sse_stats() -> None:
     scope = {
         "type": "http",
         "method": "GET",
-        "path": "/metrics",
+        "path": "/api/prometheus",
         "headers": [],
         "app": app,
     }

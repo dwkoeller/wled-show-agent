@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from config.constants import APP_TITLE, APP_VERSION
 from routes import (
+    chat,
     a2a,
     backup,
     audit,
@@ -79,6 +80,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         await app_state.startup(app)
         yield
     finally:
+        chat_service = getattr(app.state, "chat", None)
+        if chat_service is not None:
+            await chat_service.close()
         try:
             await app_state.shutdown(app)
         except Exception:
@@ -86,7 +90,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title=APP_TITLE, version=APP_VERSION, lifespan=lifespan)
+    app = FastAPI(title=APP_TITLE, version=APP_VERSION, lifespan=lifespan, docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json", swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect")
 
     @app.exception_handler(BlockingQueueFull)
     async def _blocking_queue_full_handler(request, exc):  # type: ignore[no-untyped-def]
@@ -126,6 +130,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(rate_limit_middleware)
 
     app.include_router(root.router)
+    app.include_router(chat.router)
     app.include_router(backup.router)
     app.include_router(audit.router)
     app.include_router(auth.router)

@@ -6,7 +6,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, inspect, text
 from sqlmodel import SQLModel
 
 
@@ -20,7 +20,7 @@ import sql_store  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _sync_database_url(url: str) -> str:
@@ -62,6 +62,20 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # MySQL enforces VARCHAR lengths; historical revision IDs exceed 32.
+        # Preserve those IDs for databases that already applied the migrations.
+        if connection.dialect.name == "mysql":
+            connection.execute(text(
+                "CREATE TABLE IF NOT EXISTS alembic_version "
+                "(version_num VARCHAR(128) NOT NULL PRIMARY KEY)"
+            ))
+            columns = inspect(connection).get_columns("alembic_version")
+            version = next(c for c in columns if c["name"] == "version_num")
+            if version["type"].length < 128:
+                connection.execute(text(
+                    "ALTER TABLE alembic_version MODIFY version_num VARCHAR(128) NOT NULL"
+                ))
+            connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

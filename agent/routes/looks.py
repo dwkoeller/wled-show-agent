@@ -8,11 +8,11 @@ from services import looks_service
 router = APIRouter()
 
 router.add_api_route(
-    "/v1/looks/generate", looks_service.looks_generate, methods=["POST"]
+    "/api/looks/generate", looks_service.looks_generate, methods=["POST"]
 )
-router.add_api_route("/v1/looks/packs", looks_service.looks_packs, methods=["GET"])
+router.add_api_route("/api/looks/packs", looks_service.looks_packs, methods=["GET"])
 router.add_api_route(
-    "/v1/looks/apply_random",
+    "/api/looks/apply_random",
     looks_service.looks_apply_random,
     methods=["POST"],
 )

@@ -16,7 +16,7 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
-import React, { useMemo } from "react";
+import React, { lazy, Suspense, useMemo } from "react";
 import {
   Navigate,
   Route,
@@ -26,10 +26,10 @@ import {
 } from "react-router-dom";
 import { useAuth } from "./auth";
 import { ChatPage } from "./pages/ChatPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { JobsPage } from "./pages/JobsPage";
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const JobsPage = lazy(() => import("./pages/JobsPage").then((m) => ({ default: m.JobsPage })));
 import { LoginPage } from "./pages/LoginPage";
-import { ToolsPage } from "./pages/ToolsPage";
+const ToolsPage = lazy(() => import("./pages/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 import { useServerEvents } from "./hooks/useServerEvents";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -71,15 +71,15 @@ export function App() {
   const loc = useLocation();
 
   const navValue = useMemo(() => {
-    if (loc.pathname.startsWith("/chat")) return "/chat";
+    if (loc.pathname.startsWith("/dashboard")) return "/dashboard";
     if (loc.pathname.startsWith("/jobs")) return "/jobs";
     if (loc.pathname.startsWith("/tools")) return "/tools";
     return "/";
   }, [loc.pathname]);
 
   return (
-    <Box sx={{ pb: 8 }}>
-      <AppBar position="fixed">
+    <Box sx={{ pb: "calc(64px + env(safe-area-inset-bottom))" }}>
+      <AppBar position="fixed" elevation={0} sx={{ background: "#0b141e", borderBottom: "1px solid #ffffff0c" }}>
         <Toolbar sx={{ display: "flex", justifyContent: "space-between" }}>
           <Typography variant="h6" component="div">
             WLED Show Agent
@@ -98,22 +98,23 @@ export function App() {
         </Toolbar>
       </AppBar>
       <Toolbar />
-      <Container maxWidth="md" sx={{ mt: 2 }}>
+      <Container maxWidth="md" sx={{ mt: loc.pathname === "/" ? 0 : 2, px: loc.pathname === "/" ? "0 !important" : undefined }}>
+        <Suspense fallback={<Box sx={{ p: 5, textAlign: "center" }}><CircularProgress /></Box>}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route
             path="/"
             element={
               <RequireAuth>
-                <DashboardPage />
+                <ChatPage />
               </RequireAuth>
             }
           />
           <Route
-            path="/chat"
+            path="/dashboard"
             element={
               <RequireAuth>
-                <ChatPage />
+                <DashboardPage />
               </RequireAuth>
             }
           />
@@ -135,25 +136,27 @@ export function App() {
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </Container>
 
       <Paper
-        sx={{ position: "fixed", bottom: 0, left: 0, right: 0 }}
+        sx={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 1100, pb: "env(safe-area-inset-bottom)", background: "#0e1823", borderTop: "1px solid #ffffff0c" }}
         elevation={3}
       >
         <BottomNavigation
+          sx={{ height: 64, background: "transparent", maxWidth: 720, mx: "auto" }}
           value={navValue}
           onChange={(_, value) => nav(value)}
           showLabels
         >
           <BottomNavigationAction
             label="Dashboard"
-            value="/"
+            value="/dashboard"
             icon={<DashboardIcon />}
           />
           <BottomNavigationAction
             label="Chat"
-            value="/chat"
+            value="/"
             icon={<ChatIcon />}
           />
           <BottomNavigationAction

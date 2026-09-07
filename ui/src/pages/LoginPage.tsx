@@ -41,7 +41,7 @@ export function LoginPage() {
 
   return (
     <Container maxWidth="xs">
-      <Box sx={{ mt: 10, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Box sx={{ mt: { xs: 4, sm: 8 }, display: "flex", flexDirection: "column", gap: 2 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <LockIcon color="primary" />
           <Typography variant="h5">Sign in</Typography>
@@ -84,8 +84,7 @@ export function LoginPage() {
             Sign in
           </Button>
           <Typography variant="body2" color="text.secondary">
-            Auth uses an HttpOnly JWT cookie. Use HTTPS and set
-            AUTH_COOKIE_SECURE=true for internet-facing deployments.
+            Sign in with your show account and the six-digit code from your authenticator.
           </Typography>
         </Box>
       </Box>

@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = async () => {
     try {
       const me = await api<{ ok: boolean; user: AuthUser; session_id?: string }>(
-        "/v1/auth/me",
+        "/api/auth/me",
         {
           method: "GET",
         },
@@ -69,12 +69,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     password: string;
     totp?: string;
   }) => {
-    await api("/v1/auth/login", { method: "POST", json: args });
+    await api("/api/auth/login", { method: "POST", json: args });
     await refresh();
   };
 
   const logout = async () => {
-    await api("/v1/auth/logout", { method: "POST", json: {} });
+    await api("/api/auth/logout", { method: "POST", json: {} });
     setUser(null);
   };
 
@@ -82,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
     (async () => {
       try {
-        const cfg = await api<AuthConfig>("/v1/auth/config", { method: "GET" });
+        const cfg = await api<AuthConfig>("/api/auth/config", { method: "GET" });
         if (mounted) setConfig(cfg);
         setCsrfConfig({
           enabled: Boolean(cfg.csrf_enabled),

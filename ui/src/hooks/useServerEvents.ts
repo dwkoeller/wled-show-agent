@@ -54,7 +54,7 @@ function openEventSource() {
   if (!eventsEnabled || eventSource) return;
   const params = new URLSearchParams();
   if (lastEventId) params.set("last_event_id", String(lastEventId));
-  const url = params.toString() ? `/v1/events?${params}` : "/v1/events";
+  const url = params.toString() ? `/api/events?${params}` : "/api/events";
   eventSource = new EventSource(url, { withCredentials: true });
   eventSource.onopen = () => {
     connected = true;

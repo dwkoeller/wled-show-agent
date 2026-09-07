@@ -101,3 +101,29 @@ async def test_ddp_streamer_falls_back_when_pattern_not_picklable(
 
     assert blocking_pool.calls > 0
     assert cpu_pool.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_starts_leave_one_worker_and_enforce_cap(monkeypatch) -> None:
+    async def layout(*_, **__):
+        await asyncio.sleep(0.01)
+        return SegmentLayout(led_count=3, segments=[SegmentRange(id=0, start=0, stop=3)], kind="equal")
+
+    monkeypatch.setattr(ddp_mod, "fetch_segment_layout_async", layout)
+    monkeypatch.setattr(ddp_mod, "DDPAsyncSender", _DummySender)
+    brightness = []
+    class WLED(_DummyWLED):
+        async def set_brightness(self, value):
+            brightness.append(value)
+
+    ddp = ddp_mod.DDPStreamer(
+        wled=WLED(), geometry=TreeGeometry(runs=1, pixels_per_run=3, segment_len=3, segments_per_run=1),
+        ddp_cfg=DDPConfig(host="127.0.0.1"), max_bri=64, blocking=_DummyPool(),
+    )
+    await asyncio.gather(*(ddp.start(pattern="solid", duration_s=10, brightness=255) for _ in range(2)))
+    workers = [t for t in asyncio.all_tasks() if t.get_name() == "ddp_streamer" and not t.done()]
+    assert len(workers) == 1
+    assert brightness == [64, 64]
+    await ddp.stop()
+    assert all(t.done() for t in workers)
+    assert not (await ddp.status()).running

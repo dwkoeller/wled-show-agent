@@ -115,14 +115,14 @@ def _client_ip(request: Request, trust_proxy: bool) -> str:
 def _build_exempt_prefixes(extra: Iterable[str] | None) -> tuple[str, ...]:
     defaults = (
         "/ui",
-        "/readyz",
-        "/livez",
-        "/v1/health",
-        "/metrics",
-        "/v1/metrics",
-        "/v1/events",
-        "/openapi.json",
-        "/docs",
+        "/api/readyz",
+        "/api/livez",
+        "/api/health",
+        "/api/prometheus",
+        "/api/metrics",
+        "/api/events",
+        "/api/openapi.json",
+        "/api/docs",
         "/favicon.ico",
     )
     out = list(defaults)

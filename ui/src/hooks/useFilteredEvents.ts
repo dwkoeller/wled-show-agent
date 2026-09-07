@@ -83,7 +83,7 @@ export function useFilteredEvents(options: UseFilteredEventsOptions = {}) {
     }
     if (types.length) params.set("types", types.join(","));
     if (events.length) params.set("event", events.join(","));
-    const url = params.toString() ? `/v1/events?${params}` : "/v1/events";
+    const url = params.toString() ? `/api/events?${params}` : "/api/events";
     const source = new EventSource(url, { withCredentials: true });
 
     source.onopen = () => {

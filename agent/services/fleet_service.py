@@ -128,7 +128,7 @@ async def _peer_supported_actions(
     *, state: AppState, peer: Any, timeout_s: float
 ) -> set[str]:
     card = await _peer_get_json(
-        state=state, peer=peer, path="/v1/a2a/card", timeout_s=timeout_s
+        state=state, peer=peer, path="/api/a2a/card", timeout_s=timeout_s
     )
     if not isinstance(card, dict) or card.get("ok") is not True:
         return set()
@@ -1037,7 +1037,7 @@ async def fleet_health(
                 out = await _peer_post_json(
                     state=state,
                     peer=peer,
-                    path="/v1/a2a/invoke",
+                    path="/api/a2a/invoke",
                     payload=payload,
                     timeout_s=timeout_s,
                 )
@@ -1858,7 +1858,7 @@ async def fleet_invoke(
                     out = await _peer_post_json(
                         state=state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s,
                     )
@@ -1896,7 +1896,7 @@ async def fleet_invoke(
 
 async def fleet_apply_random_look(
     req: FleetApplyRandomLookRequest,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -2000,7 +2000,7 @@ async def fleet_apply_random_look(
                         out = await _peer_post_json(
                             state=state,
                             peer=peer,
-                            path="/v1/a2a/invoke",
+                            path="/api/a2a/invoke",
                             payload=payload,
                             timeout_s=timeout_s,
                         )
@@ -2039,7 +2039,7 @@ async def fleet_apply_random_look(
 
 async def fleet_crossfade(
     req: FleetCrossfadeRequest,
-    request: Request | None = None,
+    request: Request = None,
     _: None = Depends(require_a2a_auth),
     state: AppState = Depends(get_state),
 ) -> Dict[str, Any]:
@@ -2134,7 +2134,7 @@ async def fleet_crossfade(
                         out = await _peer_post_json(
                             state=state,
                             peer=peer,
-                            path="/v1/a2a/invoke",
+                            path="/api/a2a/invoke",
                             payload=payload,
                             timeout_s=timeout_s,
                         )
@@ -2200,7 +2200,7 @@ async def fleet_stop_all(
                     out = await _peer_post_json(
                         state=state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s,
                     )

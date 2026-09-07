@@ -164,7 +164,7 @@ async def _peer_supported_actions(
     *, state: AppState, peer: Any, timeout_s: float
 ) -> set[str]:
     card = await _peer_get_json(
-        state=state, peer=peer, path="/v1/a2a/card", timeout_s=timeout_s
+        state=state, peer=peer, path="/api/a2a/card", timeout_s=timeout_s
     )
     if not isinstance(card, dict) or card.get("ok") is not True:
         return set()
@@ -412,7 +412,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
                     out = await _peer_post_json(
                         state=state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s,
                     )
@@ -560,7 +560,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
                         res2 = await _peer_post_json(
                             state=state,
                             peer=peer,
-                            path="/v1/a2a/invoke",
+                            path="/api/a2a/invoke",
                             payload=payload,
                             timeout_s=timeout_s,
                         )
@@ -627,7 +627,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
                     res2 = await _peer_post_json(
                         state=state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s,
                     )
@@ -664,7 +664,7 @@ async def _local_command(state: AppState, text: str) -> Dict[str, Any]:
                     res2 = await _peer_post_json(
                         state=state,
                         peer=peer,
-                        path="/v1/a2a/invoke",
+                        path="/api/a2a/invoke",
                         payload=payload,
                         timeout_s=timeout_s,
                     )

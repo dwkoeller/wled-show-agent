@@ -56,7 +56,7 @@ export function BackupTools() {
     setBusy(true);
     setError(null);
     try {
-      const url = new URL("/v1/backup/export", window.location.origin);
+      const url = new URL("/api/backup/export", window.location.origin);
       url.searchParams.set("include_db", includeDb ? "true" : "false");
       url.searchParams.set("include_data", includeData ? "true" : "false");
       url.searchParams.set("include_auth", includeAuth ? "true" : "false");
@@ -92,7 +92,7 @@ export function BackupTools() {
     setError(null);
     setImportResult(null);
     try {
-      const url = new URL("/v1/backup/import", window.location.origin);
+      const url = new URL("/api/backup/import", window.location.origin);
       url.searchParams.set("restore_db", restoreDb ? "true" : "false");
       url.searchParams.set("restore_data", restoreData ? "true" : "false");
       url.searchParams.set("restore_auth", restoreAuth ? "true" : "false");

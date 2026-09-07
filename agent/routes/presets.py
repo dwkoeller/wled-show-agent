@@ -8,7 +8,7 @@ from services import presets_service
 router = APIRouter()
 
 router.add_api_route(
-    "/v1/presets/import_from_pack",
+    "/api/presets/import_from_pack",
     presets_service.presets_import,
     methods=["POST"],
 )

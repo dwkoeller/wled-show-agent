@@ -184,7 +184,7 @@ def import_xlights_xsq_timing_file(
     """
     Import a timing/beat grid from an xLights `.xsq` file.
 
-    Returns a dict compatible with the `/v1/audio/analyze` output shape (beats_s, bpm, duration_s).
+    Returns a dict compatible with the `/api/audio/analyze` output shape (beats_s, bpm, duration_s).
     """
     xml_text = _read_xsq_xml_text(xsq_path)
     tracks = parse_xlights_xsq_timing_tracks(xml_text)

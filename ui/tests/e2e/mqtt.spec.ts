@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("mqtt tools show bridge status and topics", async ({ page }) => {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({
       json: {
         ok: true,
@@ -16,10 +16,10 @@ test("mqtt tools show bridge status and topics", async ({ page }) => {
       },
     });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: { ok: true, user: { username: "tester" } } });
   });
-  await page.route("**/v1/mqtt/status", async (route) => {
+  await page.route("**/api/mqtt/status", async (route) => {
     await route.fulfill({
       json: {
         ok: true,

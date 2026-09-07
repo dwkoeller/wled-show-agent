@@ -13,10 +13,10 @@ const authConfig = {
 };
 
 async function mockAuth(page) {
-  await page.route("**/v1/auth/config", async (route) => {
+  await page.route("**/api/auth/config", async (route) => {
     await route.fulfill({ json: authConfig });
   });
-  await page.route("**/v1/auth/me", async (route) => {
+  await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({
       json: { ok: true, user: { username: "tester", role: "admin" } },
     });
@@ -25,7 +25,7 @@ async function mockAuth(page) {
 
 test("backup export triggers a download", async ({ page }) => {
   await mockAuth(page);
-  await page.route("**/v1/backup/export**", async (route) => {
+  await page.route("**/api/backup/export**", async (route) => {
     await route.fulfill({
       status: 200,
       headers: { "content-type": "application/zip" },
@@ -44,7 +44,7 @@ test("backup export triggers a download", async ({ page }) => {
 
 test("backup import shows success", async ({ page }) => {
   await mockAuth(page);
-  await page.route("**/v1/backup/import**", async (route) => {
+  await page.route("**/api/backup/import**", async (route) => {
     await route.fulfill({ json: { ok: true } });
   });
   await page.goto("tools/backup");
@@ -62,7 +62,7 @@ test("backup import shows success", async ({ page }) => {
 
 test("backup import shows error details", async ({ page }) => {
   await mockAuth(page);
-  await page.route("**/v1/backup/import**", async (route) => {
+  await page.route("**/api/backup/import**", async (route) => {
     await route.fulfill({
       status: 400,
       json: { detail: "Invalid backup zip" },
@@ -83,7 +83,7 @@ test("backup import shows error details", async ({ page }) => {
 
 test("rate limit responses surface in tools UI", async ({ page }) => {
   await mockAuth(page);
-  await page.route("**/v1/files/list**", async (route) => {
+  await page.route("**/api/files/list**", async (route) => {
     await route.fulfill({
       status: 429,
       json: { detail: "Too many requests. Slow down." },
@@ -96,7 +96,7 @@ test("rate limit responses surface in tools UI", async ({ page }) => {
 test("SSE-disabled fallback polls for updates", async ({ page }) => {
   await mockAuth(page);
   let listCalls = 0;
-  await page.route("**/v1/files/list**", async (route) => {
+  await page.route("**/api/files/list**", async (route) => {
     listCalls += 1;
     await route.fulfill({ json: { ok: true, files: [] } });
   });
@@ -159,7 +159,7 @@ test("SSE reconnect still triggers refresh", async ({ page }) => {
 
   await mockAuth(page);
   let listCalls = 0;
-  await page.route("**/v1/files/list**", async (route) => {
+  await page.route("**/api/files/list**", async (route) => {
     listCalls += 1;
     await route.fulfill({ json: { ok: true, files: [] } });
   });

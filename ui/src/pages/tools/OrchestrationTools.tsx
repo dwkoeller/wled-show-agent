@@ -442,7 +442,7 @@ export function OrchestrationTools() {
           ? ""
           : `&scope=${encodeURIComponent(presetScope)}`;
       const res = await api<PresetsRes>(
-        `/v1/orchestration/presets?limit=200${scopeParam}`,
+        `/api/orchestration/presets?limit=200${scopeParam}`,
         {
           method: "GET",
         },
@@ -467,22 +467,22 @@ export function OrchestrationTools() {
         palettesRes,
         lastRes,
       ] = await Promise.all([
-        api("/v1/orchestration/status", { method: "GET" }).catch((e) => ({
+        api("/api/orchestration/status", { method: "GET" }).catch((e) => ({
           ok: false,
           error: e instanceof Error ? e.message : String(e),
         })),
-        api("/v1/fleet/orchestration/status", { method: "GET" }).catch((e) => ({
+        api("/api/fleet/orchestration/status", { method: "GET" }).catch((e) => ({
           ok: false,
           error: e instanceof Error ? e.message : String(e),
         })),
-        api<SequenceListRes>("/v1/sequences/list", { method: "GET" }).catch(
+        api<SequenceListRes>("/api/sequences/list", { method: "GET" }).catch(
           () => null,
         ),
-        api<DdpPatternsRes>("/v1/ddp/patterns", { method: "GET" }).catch(() => null),
-        api<WledPresetsRes>("/v1/wled/presets", { method: "GET" }).catch(() => null),
-        api<WledEffectsRes>("/v1/wled/effects", { method: "GET" }).catch(() => null),
-        api<WledPalettesRes>("/v1/wled/palettes", { method: "GET" }).catch(() => null),
-        api<LastAppliedRes>("/v1/meta/last_applied", { method: "GET" }).catch(
+        api<DdpPatternsRes>("/api/ddp/patterns", { method: "GET" }).catch(() => null),
+        api<WledPresetsRes>("/api/wled/presets", { method: "GET" }).catch(() => null),
+        api<WledEffectsRes>("/api/wled/effects", { method: "GET" }).catch(() => null),
+        api<WledPalettesRes>("/api/wled/palettes", { method: "GET" }).catch(() => null),
+        api<LastAppliedRes>("/api/meta/last_applied", { method: "GET" }).catch(
           () => null,
         ),
       ]);
@@ -975,8 +975,8 @@ export function OrchestrationTools() {
       }
       await api(
         mode === "fleet"
-          ? "/v1/fleet/orchestration/start"
-          : "/v1/orchestration/start",
+          ? "/api/fleet/orchestration/start"
+          : "/api/orchestration/start",
         { method: "POST", json: payload },
       );
       await refresh();
@@ -993,8 +993,8 @@ export function OrchestrationTools() {
     try {
       await api(
         mode === "fleet"
-          ? "/v1/fleet/orchestration/stop"
-          : "/v1/orchestration/stop",
+          ? "/api/fleet/orchestration/stop"
+          : "/api/orchestration/stop",
         { method: "POST", json: {} },
       );
       await refresh();
@@ -1054,7 +1054,7 @@ export function OrchestrationTools() {
 
   const applyCurrentState = async (id: string) => {
     try {
-      const res = await api<{ ok: boolean; state?: any }>("/v1/wled/state", {
+      const res = await api<{ ok: boolean; state?: any }>("/api/wled/state", {
         method: "GET",
       });
       if (res?.state) {
@@ -1113,7 +1113,7 @@ export function OrchestrationTools() {
         }
       }
       const res = await api<{ ok: boolean; preset: OrchestrationPreset }>(
-        "/v1/orchestration/presets",
+        "/api/orchestration/presets",
         {
           method: "POST",
           json: {
@@ -1177,7 +1177,7 @@ export function OrchestrationTools() {
     setBusy(true);
     setError(null);
     try {
-      await api(`/v1/orchestration/presets/${preset.id}`, {
+      await api(`/api/orchestration/presets/${preset.id}`, {
         method: "DELETE",
       });
       setSelectedPresetId("");
@@ -1198,7 +1198,7 @@ export function OrchestrationTools() {
           ? ""
           : `&scope=${encodeURIComponent(presetScope)}`;
       const res = await api<PresetsRes>(
-        `/v1/orchestration/presets/export?limit=2000${scopeParam}`,
+        `/api/orchestration/presets/export?limit=2000${scopeParam}`,
         { method: "GET" },
       );
       setPresetExport(JSON.stringify(res.presets || [], null, 2));
@@ -1222,7 +1222,7 @@ export function OrchestrationTools() {
           ? parsed.presets
           : null;
       if (!presetsList) throw new Error("JSON must be an array or {presets:[...]}.");
-      await api("/v1/orchestration/presets/import", {
+      await api("/api/orchestration/presets/import", {
         method: "POST",
         json: { presets: presetsList },
       });

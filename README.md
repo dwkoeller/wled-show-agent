@@ -1,6 +1,8 @@
 # WLED Show Agent
 
-Local-first **show director + pattern/sequence generator** for a WLED mega tree.
+Local-first **mobile show chatbot + director + pattern/sequence generator** for WLED and Falcon Player.
+
+For the installed Docker-on-LXC deployment on `172.16.10.0/24`, see [Proxmox deployment](deploy/proxmox/README.md). The React frontend lives at `/` and FastAPI endpoints at `/api`. The chatbot uses ChatGPT subscription sign-in through Codex App Server; no OpenAI API key is required for chat.
 
 Runs as a single FastAPI service in Docker (works great on a Proxmox VM/LXC) and can:
 
@@ -10,7 +12,7 @@ Runs as a single FastAPI service in Docker (works great on a Proxmox VM/LXC) and
 - **Stream realtime procedural animations over DDP** (UDP 4048)
 - **Export renderable sequences to `.fseq`** (procedural `ddp` steps only)
 - **Analyze audio for BPM + beats** (writes `beats.json`)
-- **(Optional) Natural language control** via OpenAI tool-calling or local commands (`/v1/command`)
+- **(Optional) Natural language control** via OpenAI tool-calling or local commands (`/api/command`)
 - **(Optional) LedFx control** for scenes/effects/virtuals (`LEDFX_BASE_URL`)
 
 This repo is designed for **LAN use only**.
@@ -35,6 +37,8 @@ This repo is designed for **LAN use only**.
 
 ## How it works
 
+The chatbot at `/` uses Codex App Server with ChatGPT device sign-in, persistent conversations, streamed replies, and authenticated tools across the show API. Models are discovered from the connected account. The optional API-key director described below remains available separately through `/api/command`.
+
 Think of it as two planes:
 
 - **Control plane (HTTP/JSON):** set brightness, apply a “look”, import presets, run sequences.
@@ -42,8 +46,8 @@ Think of it as two planes:
 
 The “agentic” part is optional:
 
-- If you set `OPENAI_API_KEY`, `/v1/command` becomes a tool-using director that decides which local actions to take.
-- Without OpenAI, `/v1/command` supports a small local command set (and the generator/sequence/DDP endpoints still work).
+- If you set `OPENAI_API_KEY`, `/api/command` becomes a tool-using director that decides which local actions to take.
+- Without OpenAI, `/api/command` supports a small local command set (and the generator/sequence/DDP endpoints still work).
 
 ---
 
@@ -51,7 +55,7 @@ The “agentic” part is optional:
 
 - A running WLED controller reachable from the machine/container running this service
 - Docker + Docker Compose
-- (Optional) OpenAI API key to enable `/v1/command`
+- (Optional) OpenAI API key to enable `/api/command`
 
 ---
 
@@ -72,29 +76,31 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-This starts 3 containers:
+Set the required administrator password, JWT secret, and authenticator secret in `.env` before starting (authentication and TOTP are required).
 
-- `ui` (Nginx) serves `/ui/*` and proxies `/v1/*` + `/docs` to the API
+This starts 3 Docker containers inside the application LXC:
+
+- `ui` (Nginx) serves React at `/` and proxies `/api/*` to the API
 - `api` (FastAPI) runs the agent backend
 - `db` (MySQL) stores job history + small UI state (required)
 
 4. Open the API docs (Swagger UI)
 
-- `http://<host>:8088/docs`
+- `http://<host>/api/docs`
 
-Optional: open the mobile-friendly UI:
+Open the mobile-first chatbot:
 
-- `http://<host>:8088/ui`
+- `http://<host>/`
 
 Mobile install (PWA):
 
-- On iOS/Android, open `/ui` and use “Add to Home Screen” (installable web app).
+- On iOS/Android, open `/` and use “Add to Home Screen” (installable web app).
 - For voice input + secure cookies on phones, HTTPS is strongly recommended (see “HTTPS on LAN” below).
 
 5. Sanity check
 
 ```bash
-curl -sS http://<host>:8088/v1/health
+curl -sS http://<host>/api/health
 ```
 
 ---
@@ -128,7 +134,7 @@ The full set of environment variables is documented in `.env.example`.
 
 ### Outbound retries / backoff
 
-Shared retry policy for WLED/FPP/LedFx/peer HTTP calls (applies to `/v1/fleet/*`, `/v1/fpp/*`, `/v1/ledfx/*`, `/v1/wled/*`):
+Shared retry policy for WLED/FPP/LedFx/peer HTTP calls (applies to `/api/fleet/*`, `/api/fpp/*`, `/api/ledfx/*`, `/api/wled/*`):
 
 - `OUTBOUND_RETRY_ATTEMPTS` – total attempts (default `2`)
 - `OUTBOUND_RETRY_BACKOFF_BASE_S` – base backoff (default `0.15`)
@@ -185,11 +191,11 @@ QUAD_DEFAULT_START_POS=front
 
 ### OpenAI (optional)
 
-Enables `/v1/command`:
+Enables `/api/command`:
 
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` (default `gpt-5-mini`)
-- `OPENAI_STT_MODEL` (default `gpt-4o-mini-transcribe`) for `/v1/voice/transcribe` + `/v1/voice/command`
+- `OPENAI_STT_MODEL` (default `gpt-4o-mini-transcribe`) for `/api/voice/transcribe` + `/api/voice/command`
   - Recommended: `gpt-5-mini` (best reliability/$ for tool-calling)
   - Cheapest: `gpt-5-nano` (works, but can be less reliable with tool args)
   - Best quality: `gpt-5` / `gpt-5.2` (usually unnecessary for this toolset)
@@ -219,8 +225,8 @@ When enabled, the director can call tools like:
 Notes:
 
 - When `AUTH_ENABLED=true`, all endpoints require either a valid JWT (cookie or `Authorization: Bearer <jwt>`), a per-user API key (`X-API-Key: wsa_...`), or the configured `X-A2A-Key` (if you also use A2A/fleet).
-- `GET /v1/health`, `GET /v1/auth/config`, `POST /v1/auth/login`, `POST /v1/auth/logout`, and `GET /ui/*` remain accessible without a token so you can sign in.
-- Users and sessions are stored in SQL so admins can revoke sessions and manage users (`/v1/auth/users`, `/v1/auth/sessions`).
+- `GET /api/health`, `GET /api/auth/config`, `POST /api/auth/login`, `POST /api/auth/logout`, and `GET /ui/*` remain accessible without a token so you can sign in.
+- Users and sessions are stored in SQL so admins can revoke sessions and manage users (`/api/auth/users`, `/api/auth/sessions`).
 
 ### API rate limiting
 
@@ -327,18 +333,18 @@ Set `DDP_USE_CPU_POOL=true` to render frames in the CPU process pool instead.
 
 ### AI capability + cost (estimates)
 
-Important: **Only** `POST /v1/command` uses model tokens. Everything else (looks/sequences/DDP/pixel streaming) is local and free.
+Important: **Only** `POST /api/command` uses model tokens. Everything else (looks/sequences/DDP/pixel streaming) is local and free.
 
-Also note: “cool sequences” in this repo are generated locally via `POST /v1/sequences/generate` (no AI required). The model is only used to interpret natural language and choose which local tool/endpoints to call.
+Also note: “cool sequences” in this repo are generated locally via `POST /api/sequences/generate` (no AI required). The model is only used to interpret natural language and choose which local tool/endpoints to call.
 
 How many tokens per command?
 
-- `POST /v1/command` usually results in **2 model calls** (tool selection + final confirmation).
+- `POST /api/command` usually results in **2 model calls** (tool selection + final confirmation).
 - Typical total per command: **~700–1600 input tokens** + **~50–200 output tokens** (depends on prompt length and tool output size).
 
 Show-window estimate (sunset→midnight ≈ **6 hours/night** for **40 days** ⇒ **240 hours**):
 
-If you call `/v1/command` every **10 minutes** while the show runs:
+If you call `/api/command` every **10 minutes** while the show runs:
 
 - Calls: `6/hour * 240 hours = 1440`
 - Total tokens (rough): **1.008M–2.304M input** + **0.072M–0.288M output**
@@ -366,126 +372,126 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 
 ### Status / diagnostics
 
-- `GET /v1/health`
+- `GET /api/health`
 - `GET /livez` – liveness probe (always 200 if process is up)
 - `GET /readyz` – readiness checks (WLED + DB + LedFx when configured)
-- `GET /v1/wled/info`
-- `GET /v1/wled/state`
-- `GET /v1/wled/segments`
-- `GET /v1/segments/layout`
-- `GET /v1/segments/orientation`
+- `GET /api/wled/info`
+- `GET /api/wled/state`
+- `GET /api/wled/segments`
+- `GET /api/segments/layout`
+- `GET /api/segments/orientation`
 
 ### Looks
 
-- `POST /v1/looks/generate` – generate a big look pack into `./data/looks/`
-- `GET /v1/looks/packs` – list available packs
-- `POST /v1/looks/apply_random` – apply a random look (no AI required)
+- `POST /api/looks/generate` – generate a big look pack into `./data/looks/`
+- `GET /api/looks/packs` – list available packs
+- `POST /api/looks/apply_random` – apply a random look (no AI required)
 
 ### Preset import (optional)
 
-- `POST /v1/presets/import_from_pack`
+- `POST /api/presets/import_from_pack`
 
 ### Sequences
 
-- `POST /v1/sequences/generate`
-- `GET /v1/sequences/list`
-- `POST /v1/sequences/play`
-- `POST /v1/sequences/stop`
-- `GET /v1/sequences/status`
+- `POST /api/sequences/generate`
+- `GET /api/sequences/list`
+- `POST /api/sequences/play`
+- `POST /api/sequences/stop`
+- `GET /api/sequences/status`
 
 ### Metadata (SQL)
 
-- `POST /v1/meta/reconcile` – scan DATA_DIR and upsert metadata tables
-- `GET /v1/meta/reconcile/status` – last reconcile run + status
-- `GET /v1/meta/reconcile/history` – reconcile run history (supports `limit`, `offset`, `status`, `source`)
-- `POST /v1/meta/reconcile/cancel` – request cancel for the active run
+- `POST /api/meta/reconcile` – scan DATA_DIR and upsert metadata tables
+- `GET /api/meta/reconcile/status` – last reconcile run + status
+- `GET /api/meta/reconcile/history` – reconcile run history (supports `limit`, `offset`, `status`, `source`)
+- `POST /api/meta/reconcile/cancel` – request cancel for the active run
 
 ### Orchestration (scenes + playlists)
 
-- `POST /v1/orchestration/start` – run a mixed playlist of looks, sequences, DDP, blackout steps
-- `POST /v1/orchestration/stop`
-- `GET /v1/orchestration/status`
-- `POST /v1/orchestration/crossfade` – apply a look or raw state with a transition
-- `POST /v1/orchestration/blackout` – fade to off (also stops running sequence/DDP)
-- `GET /v1/orchestration/presets` – list saved orchestration presets (supports `scope`, `limit`, `offset`)
-- `POST /v1/orchestration/presets` – create or update a preset payload
-- `GET /v1/orchestration/presets/export` – export presets (JSON)
-- `POST /v1/orchestration/presets/import` – import presets (JSON)
-- `DELETE /v1/orchestration/presets/{preset_id}` – delete a preset
+- `POST /api/orchestration/start` – run a mixed playlist of looks, sequences, DDP, blackout steps
+- `POST /api/orchestration/stop`
+- `GET /api/orchestration/status`
+- `POST /api/orchestration/crossfade` – apply a look or raw state with a transition
+- `POST /api/orchestration/blackout` – fade to off (also stops running sequence/DDP)
+- `GET /api/orchestration/presets` – list saved orchestration presets (supports `scope`, `limit`, `offset`)
+- `POST /api/orchestration/presets` – create or update a preset payload
+- `GET /api/orchestration/presets/export` – export presets (JSON)
+- `POST /api/orchestration/presets/import` – import presets (JSON)
+- `DELETE /api/orchestration/presets/{preset_id}` – delete a preset
 
 ### Fleet sequences (multi-controller)
 
 Run a single generated sequence across your whole A2A fleet:
 
-- `POST /v1/fleet/sequences/start`
-- `POST /v1/fleet/sequences/start_staggered`
-- `POST /v1/fleet/sequences/stop`
-- `GET /v1/fleet/sequences/status`
+- `POST /api/fleet/sequences/start`
+- `POST /api/fleet/sequences/start_staggered`
+- `POST /api/fleet/sequences/stop`
+- `GET /api/fleet/sequences/status`
 
 ### Fleet orchestration (scenes across devices)
 
-- `POST /v1/fleet/orchestration/start`
-- `POST /v1/fleet/orchestration/stop`
-- `GET /v1/fleet/orchestration/status`
+- `POST /api/fleet/orchestration/start`
+- `POST /api/fleet/orchestration/stop`
+- `GET /api/fleet/orchestration/status`
 
 Fleet orchestration sequence steps support optional `stagger_s` and `start_delay_s`
 to stagger per-peer starts.
 
 ### DDP patterns (realtime)
 
-- `GET /v1/ddp/patterns`
-- `POST /v1/ddp/start`
-- `POST /v1/ddp/stop`
-- `GET /v1/ddp/status`
+- `GET /api/ddp/patterns`
+- `POST /api/ddp/start`
+- `POST /api/ddp/stop`
+- `GET /api/ddp/status`
 
 ### Natural-language control (optional)
 
-- `POST /v1/command`
+- `POST /api/command`
 
 ### Voice (UI fallback)
 
-- `POST /v1/voice/transcribe` – OpenAI STT used by the UI when browser speech APIs are unavailable
-- `POST /v1/voice/command` – transcribe audio and run `/v1/command` in one call
+- `POST /api/voice/transcribe` – OpenAI STT used by the UI when browser speech APIs are unavailable
+- `POST /api/voice/command` – transcribe audio and run `/api/command` in one call
 
 ### Auth (admin)
 
-- `GET /v1/auth/users` – list users
-- `POST /v1/auth/users` – create user (role, ip_allowlist, TOTP)
-- `PUT /v1/auth/users/{username}` – update user (password/role/disable/rotate TOTP/ip_allowlist)
-- `DELETE /v1/auth/users/{username}` – delete user
-- `GET /v1/auth/sessions` – list sessions (supports `username`, `active_only`, `limit`, `offset`)
-- `POST /v1/auth/sessions/revoke` – revoke by `jti` or `username`
-- `GET /v1/auth/login_attempts` – list login attempts / lockouts
-- `POST /v1/auth/login_attempts/clear` – clear lockouts by `username`, `ip`, or `all`
-- `GET /v1/auth/api_keys` – list API keys
-- `POST /v1/auth/api_keys` – create API key
-- `POST /v1/auth/api_keys/revoke` – revoke API key by `id` or `username`
-- `POST /v1/auth/password/change` – change your password (requires current password + TOTP)
-- `POST /v1/auth/password/reset_request` – create a one-time reset token (admin)
-- `POST /v1/auth/password/reset` – use reset token to set a new password (public)
+- `GET /api/auth/users` – list users
+- `POST /api/auth/users` – create user (role, ip_allowlist, TOTP)
+- `PUT /api/auth/users/{username}` – update user (password/role/disable/rotate TOTP/ip_allowlist)
+- `DELETE /api/auth/users/{username}` – delete user
+- `GET /api/auth/sessions` – list sessions (supports `username`, `active_only`, `limit`, `offset`)
+- `POST /api/auth/sessions/revoke` – revoke by `jti` or `username`
+- `GET /api/auth/login_attempts` – list login attempts / lockouts
+- `POST /api/auth/login_attempts/clear` – clear lockouts by `username`, `ip`, or `all`
+- `GET /api/auth/api_keys` – list API keys
+- `POST /api/auth/api_keys` – create API key
+- `POST /api/auth/api_keys/revoke` – revoke API key by `id` or `username`
+- `POST /api/auth/password/change` – change your password (requires current password + TOTP)
+- `POST /api/auth/password/reset_request` – create a one-time reset token (admin)
+- `POST /api/auth/password/reset` – use reset token to set a new password (public)
 
 ### A2A (agent-to-agent) + fleet (multi-controller)
 
 Use this when you run **multiple WLED controllers** (mega tree + rooflines) and want a single agent to coordinate them.
 
-- `GET /v1/a2a/card` – agent metadata + supported actions
-- `POST /v1/a2a/invoke` – invoke an action on this agent
-- `GET /v1/fleet/peers` – list configured peer agents
-- `GET /v1/fleet/status` – fleet status from SQL heartbeats (no fanout)
-- `GET /v1/fleet/history` – fleet heartbeat history snapshots (SQL, supports `agent_id`, `role`, `tag`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
-- `GET /v1/fleet/history/export` – export fleet heartbeat history (CSV/JSON via `format`)
-- `POST /v1/fleet/resolve` – resolve target selectors into concrete peers (no fanout)
-- `POST /v1/fleet/apply_random_look` – pick a look on this agent and apply the same look spec to peers
-- `POST /v1/fleet/crossfade` – apply a look or WLED state across the fleet with a transition
-- `POST /v1/fleet/invoke` – invoke any A2A action on peers (and optionally self)
-- `POST /v1/fleet/stop_all` – stop sequences + DDP across the fleet
-- `GET /v1/orchestration/runs` – orchestration run history (local + fleet; supports `since`, `until`, `agent_id`, `scope`, `status`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
-- `GET /v1/orchestration/runs/{run_id}` – orchestration run details (steps + peer results; supports `steps_limit`, `steps_offset`, `step_status`, `step_ok`, `peers_limit`, `peers_offset`, `peer_status`, `peer_ok`)
-- `GET /v1/orchestration/runs/export` – export orchestration runs (CSV/JSON via `format`)
-- `GET /v1/orchestration/runs/{run_id}/steps/export` – export orchestration steps (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
-- `GET /v1/orchestration/runs/{run_id}/peers/export` – export orchestration peer results (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
-- `GET /v1/audit/logs` – audit log for auth/admin actions (supports `since`, `until`, `offset`, `agent_id`, `action`, `actor`, `resource`, `ip`, `error`, `ok`; returns `count`, `limit`, `offset`, `next_offset`)
-- `GET /v1/audit/logs/export` – export audit logs (CSV/JSON via `format`)
+- `GET /api/a2a/card` – agent metadata + supported actions
+- `POST /api/a2a/invoke` – invoke an action on this agent
+- `GET /api/fleet/peers` – list configured peer agents
+- `GET /api/fleet/status` – fleet status from SQL heartbeats (no fanout)
+- `GET /api/fleet/history` – fleet heartbeat history snapshots (SQL, supports `agent_id`, `role`, `tag`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /api/fleet/history/export` – export fleet heartbeat history (CSV/JSON via `format`)
+- `POST /api/fleet/resolve` – resolve target selectors into concrete peers (no fanout)
+- `POST /api/fleet/apply_random_look` – pick a look on this agent and apply the same look spec to peers
+- `POST /api/fleet/crossfade` – apply a look or WLED state across the fleet with a transition
+- `POST /api/fleet/invoke` – invoke any A2A action on peers (and optionally self)
+- `POST /api/fleet/stop_all` – stop sequences + DDP across the fleet
+- `GET /api/orchestration/runs` – orchestration run history (local + fleet; supports `since`, `until`, `agent_id`, `scope`, `status`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /api/orchestration/runs/{run_id}` – orchestration run details (steps + peer results; supports `steps_limit`, `steps_offset`, `step_status`, `step_ok`, `peers_limit`, `peers_offset`, `peer_status`, `peer_ok`)
+- `GET /api/orchestration/runs/export` – export orchestration runs (CSV/JSON via `format`)
+- `GET /api/orchestration/runs/{run_id}/steps/export` – export orchestration steps (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
+- `GET /api/orchestration/runs/{run_id}/peers/export` – export orchestration peer results (supports `status`, `ok`, `limit`, `offset`; CSV/JSON via `format`)
+- `GET /api/audit/logs` – audit log for auth/admin actions (supports `since`, `until`, `offset`, `agent_id`, `action`, `actor`, `resource`, `ip`, `error`, `ok`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /api/audit/logs/export` – export audit logs (CSV/JSON via `format`)
 
 Targeting notes:
 
@@ -494,78 +500,78 @@ Targeting notes:
 
 ### Falcon Player (FPP) integration (optional)
 
-- `GET /v1/fpp/status`
-- `GET /v1/fpp/playlists`
-- `POST /v1/fpp/playlists/sync` – create/update a playlist JSON from sequence filenames
-- `POST /v1/fpp/playlists/import` – fetch a playlist from FPP (and optionally save locally)
-- `POST /v1/fpp/playlist/start`
-- `POST /v1/fpp/playlist/stop`
-- `POST /v1/fpp/event/trigger`
-- `POST /v1/fpp/request` – proxy a raw request to FPP (escape hatch)
-- `POST /v1/fpp/upload_file` – upload a local file under `DATA_DIR` into FPP media dirs
-- `POST /v1/fpp/export/fleet_sequence_start_script` – generate an FPP script that triggers a fleet sequence
-- `POST /v1/fpp/export/fleet_stop_all_script` – generate an FPP script that stops the fleet
-- `POST /v1/fpp/export/event_script` – generate an FPP event script (event-<id>.sh)
+- `GET /api/fpp/status`
+- `GET /api/fpp/playlists`
+- `POST /api/fpp/playlists/sync` – create/update a playlist JSON from sequence filenames
+- `POST /api/fpp/playlists/import` – fetch a playlist from FPP (and optionally save locally)
+- `POST /api/fpp/playlist/start`
+- `POST /api/fpp/playlist/stop`
+- `POST /api/fpp/event/trigger`
+- `POST /api/fpp/request` – proxy a raw request to FPP (escape hatch)
+- `POST /api/fpp/upload_file` – upload a local file under `DATA_DIR` into FPP media dirs
+- `POST /api/fpp/export/fleet_sequence_start_script` – generate an FPP script that triggers a fleet sequence
+- `POST /api/fpp/export/fleet_stop_all_script` – generate an FPP script that stops the fleet
+- `POST /api/fpp/export/event_script` – generate an FPP event script (event-<id>.sh)
 
 ### LedFx integration (optional)
 
-- `GET /v1/ledfx/status`
-- `GET /v1/ledfx/fleet` – fleet summary (health + last scene/effect via A2A)
-- `GET /v1/ledfx/virtuals`
-- `GET /v1/ledfx/scenes`
-- `GET /v1/ledfx/effects`
-- `POST /v1/ledfx/scene/activate`
-- `POST /v1/ledfx/scene/deactivate`
-- `POST /v1/ledfx/virtual/effect`
-- `POST /v1/ledfx/virtual/brightness`
-- `POST /v1/ledfx/request` – proxy a raw request to LedFx (escape hatch; `/api/*` only)
+- `GET /api/ledfx/status`
+- `GET /api/ledfx/fleet` – fleet summary (health + last scene/effect via A2A)
+- `GET /api/ledfx/virtuals`
+- `GET /api/ledfx/scenes`
+- `GET /api/ledfx/effects`
+- `POST /api/ledfx/scene/activate`
+- `POST /api/ledfx/scene/deactivate`
+- `POST /api/ledfx/virtual/effect`
+- `POST /api/ledfx/virtual/brightness`
+- `POST /api/ledfx/request` – proxy a raw request to LedFx (escape hatch; `/api/*` only)
 
 ### xLights helpers (optional)
 
-- `POST /v1/xlights/import_networks` – best-effort import of `xlights_networks.xml` to a show config skeleton
-- `POST /v1/xlights/import_project` – import an xLights project folder (networks + model channel ranges)
-- `POST /v1/xlights/import_sequence` – extract a timing/beat grid from an xLights `.xsq` (no effect data)
-- `POST /v1/show/config/load` – load a show config JSON from `DATA_DIR`
+- `POST /api/xlights/import_networks` – best-effort import of `xlights_networks.xml` to a show config skeleton
+- `POST /api/xlights/import_project` – import an xLights project folder (networks + model channel ranges)
+- `POST /api/xlights/import_sequence` – extract a timing/beat grid from an xLights `.xsq` (no effect data)
+- `POST /api/show/config/load` – load a show config JSON from `DATA_DIR`
 
 ### Jobs + progress (UI uses this)
 
-- `GET /v1/jobs` – list recent jobs
-- `GET /v1/events` – Server-Sent Events (SSE) stream (job updates emit `type="jobs"`, filters: `types`, `event`)
-- `GET /v1/events/history` – list persisted SSE history (`offset` paging or cursor `after_id`)
-- `GET /v1/events/history/export` – export SSE history (CSV/JSON/NDJSON via `format`)
-- `GET /v1/events/stats` – SSE bus + spool diagnostics
-- `POST /v1/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
+- `GET /api/jobs` – list recent jobs
+- `GET /api/events` – Server-Sent Events (SSE) stream (job updates emit `type="jobs"`, filters: `types`, `event`)
+- `GET /api/events/history` – list persisted SSE history (`offset` paging or cursor `after_id`)
+- `GET /api/events/history/export` – export SSE history (CSV/JSON/NDJSON via `format`)
+- `GET /api/events/stats` – SSE bus + spool diagnostics
+- `POST /api/jobs/*` – submit long-running tasks (looks generation, xLights import, audio analyze, sequence generate, `.fseq` export)
 - Jobs are persisted to SQL.
 - Job queue tuning: `JOB_MAX_JOBS`, `JOB_QUEUE_SIZE`, `JOB_WORKER_COUNT`.
 
 ### File helpers (UI uses this)
 
-- `GET /v1/files/list` – list files under `DATA_DIR`
-- `GET /v1/files/download` – download a file under `DATA_DIR`
-- `POST /v1/files/upload` – multipart upload with strict allowlist (UI: Tools → Files)
+- `GET /api/files/list` – list files under `DATA_DIR`
+- `GET /api/files/download` – download a file under `DATA_DIR`
+- `POST /api/files/upload` – multipart upload with strict allowlist (UI: Tools → Files)
   - Allowed dirs/types: `audio/` and `music/` (`.wav/.mp3/.ogg/.flac/.m4a/.aac`), `xlights/` (`.xsq`), `sequences/` (`.json`)
-- `PUT /v1/files/upload?path=...` – upload raw bytes to an arbitrary file under `DATA_DIR` (advanced / no multipart dependencies)
+- `PUT /api/files/upload?path=...` – upload raw bytes to an arbitrary file under `DATA_DIR` (advanced / no multipart dependencies)
   - Set `FILES_UPLOAD_ALLOWLIST_ONLY=true` to restrict raw uploads to the same allowlist as multipart.
-- `DELETE /v1/files/delete?path=...` – delete a file under `DATA_DIR`
-- `DELETE /v1/files/delete_dir?dir=...&recursive=true|false` – delete a directory under `DATA_DIR`
+- `DELETE /api/files/delete?path=...` – delete a file under `DATA_DIR`
+- `DELETE /api/files/delete_dir?dir=...&recursive=true|false` – delete a directory under `DATA_DIR`
 
 ### Pack ingestion (UI uses this)
 
-- `PUT /v1/packs/ingest?dest_dir=...&overwrite=true|false` – upload a `.zip` and unpack it under `DATA_DIR` (UI: Tools → Packs)
+- `PUT /api/packs/ingest?dest_dir=...&overwrite=true|false` – upload a `.zip` and unpack it under `DATA_DIR` (UI: Tools → Packs)
 - Limits: `PACK_MAX_FILES`, `PACK_MAX_UNPACKED_MB`
 
 ### Scheduler (UI uses this)
 
 Basic show-window automation (UI: Tools → Scheduler):
 
-- `GET /v1/scheduler/status`
-- `GET /v1/scheduler/config`
-- `POST /v1/scheduler/config`
-- `POST /v1/scheduler/start`
-- `POST /v1/scheduler/stop`
-- `POST /v1/scheduler/run_once`
-- `GET /v1/scheduler/events` – recent scheduler action history (SQL, supports `agent_id`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
-- `GET /v1/scheduler/events/export` – export scheduler events (CSV/JSON via `format`)
+- `GET /api/scheduler/status`
+- `GET /api/scheduler/config`
+- `POST /api/scheduler/config`
+- `POST /api/scheduler/start`
+- `POST /api/scheduler/stop`
+- `POST /api/scheduler/run_once`
+- `GET /api/scheduler/events` – recent scheduler action history (SQL, supports `agent_id`, `since`, `until`, `offset`; returns `count`, `limit`, `offset`, `next_offset`)
+- `GET /api/scheduler/events/export` – export scheduler events (CSV/JSON via `format`)
 
 Notes:
 
@@ -576,39 +582,39 @@ Notes:
 
 UI-facing metadata backed by SQL:
 
-- `GET /v1/meta/packs`
-- `GET /v1/meta/sequences`
-- `GET /v1/meta/audio_analyses`
-- `GET /v1/meta/show_configs`
-- `GET /v1/meta/fseq_exports`
-- `GET /v1/meta/fpp_scripts`
-- `GET /v1/meta/last_applied`
-- `POST /v1/meta/reconcile` – scan `DATA_DIR` and upsert metadata rows
+- `GET /api/meta/packs`
+- `GET /api/meta/sequences`
+- `GET /api/meta/audio_analyses`
+- `GET /api/meta/show_configs`
+- `GET /api/meta/fseq_exports`
+- `GET /api/meta/fpp_scripts`
+- `GET /api/meta/last_applied`
+- `POST /api/meta/reconcile` – scan `DATA_DIR` and upsert metadata rows
 
 ### Backup / Restore
 
-- `GET /v1/backup/export` – export DB rows + optional `DATA_DIR` into a zip archive
+- `GET /api/backup/export` – export DB rows + optional `DATA_DIR` into a zip archive
   - Query params: `include_db`, `include_data`, `include_auth`, `exclude_globs` (repeatable)
-- `POST /v1/backup/import` – restore DB rows and/or files from a zip archive (admin-only)
+- `POST /api/backup/import` – restore DB rows and/or files from a zip archive (admin-only)
   - Query params: `restore_db`, `restore_data`, `restore_auth`, `db_mode` (`merge`/`replace`), `overwrite_data`, `exclude_globs`, `require_manifest`, `require_schema_match`
   - Restores are now transactional for DB data and stage files before applying.
 - Limits: `BACKUP_MAX_ZIP_MB`, `BACKUP_MAX_UNPACKED_MB`, `BACKUP_MAX_FILE_MB`, `BACKUP_MAX_FILES`, `BACKUP_EXCLUDE_GLOBS`, `BACKUP_SPOOL_MAX_MB`
 
 ### Metrics
 
-- `GET /v1/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
+- `GET /api/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
 - `GET /metrics` – Prometheus exposition format
   - When `AUTH_ENABLED=true`: set `METRICS_PUBLIC=true` or configure `METRICS_SCRAPE_TOKEN` + `METRICS_SCRAPE_HEADER`.
   - Outbound HTTP metrics include `target_kind` labels like `wled`, `fpp`, `ledfx`, and `peer`.
 
 ### Server events (SSE)
 
-- `GET /v1/events` – server-sent events stream for UI refresh (auth required)
+- `GET /api/events` – server-sent events stream for UI refresh (auth required)
   - Supports `Last-Event-ID` or `?last_event_id=` replay from the persisted event log.
   - Optional filters: `types=jobs,fleet` and `event=created,updated` (comma-separated).
-- `GET /v1/events/history` supports cursor paging via `after_id` (CSV lists for `event_type`/`event` apply in cursor mode).
-- `GET /v1/events/history/export` supports `format=csv|json|ndjson` plus `after_id` for streaming exports.
-- `GET /v1/events/stats` returns SSE subscriber + spool diagnostics for UI health checks.
+- `GET /api/events/history` supports cursor paging via `after_id` (CSV lists for `event_type`/`event` apply in cursor mode).
+- `GET /api/events/history/export` supports `format=csv|json|ndjson` plus `after_id` for streaming exports.
+- `GET /api/events/stats` returns SSE subscriber + spool diagnostics for UI health checks.
 
 ---
 
@@ -617,21 +623,21 @@ UI-facing metadata backed by SQL:
 ### Confirm the service and WLED are reachable
 
 ```bash
-curl -sS http://localhost:8088/v1/health
-curl -sS http://localhost:8088/v1/wled/info | jq
+curl -sS http://localhost:8088/api/health
+curl -sS http://localhost:8088/api/wled/info | jq
 ```
 
 ### Confirm your segment layout (especially for 4×784 “quarters”)
 
 ```bash
-curl -sS http://localhost:8088/v1/segments/layout | jq
-curl -sS http://localhost:8088/v1/segments/orientation | jq
+curl -sS http://localhost:8088/api/segments/layout | jq
+curl -sS http://localhost:8088/api/segments/orientation | jq
 ```
 
 ### Generate a big pack of looks
 
 ```bash
-curl -sS http://localhost:8088/v1/looks/generate \
+curl -sS http://localhost:8088/api/looks/generate \
   -H "Content-Type: application/json" \
   -d '{
     "total_looks": 3000,
@@ -646,13 +652,13 @@ curl -sS http://localhost:8088/v1/looks/generate \
 List packs:
 
 ```bash
-curl -sS http://localhost:8088/v1/looks/packs | jq
+curl -sS http://localhost:8088/api/looks/packs | jq
 ```
 
 ### Apply a random look (fast “DJ mode”)
 
 ```bash
-curl -sS http://localhost:8088/v1/looks/apply_random \
+curl -sS http://localhost:8088/api/looks/apply_random \
   -H "Content-Type: application/json" \
   -d '{"theme":"candy_cane","brightness":120}' | jq
 ```
@@ -674,7 +680,7 @@ mosquitto_pub -h 192.168.1.10 -t wsa/wled-agent/ledfx/virtual/brightness -m 180
 WLED preset memory is limited; importing huge numbers repeatedly is not recommended.
 
 ```bash
-curl -sS http://localhost:8088/v1/presets/import_from_pack \
+curl -sS http://localhost:8088/api/presets/import_from_pack \
   -H "Content-Type: application/json" \
   -d '{
     "pack_file":"<put pack filename here>",
@@ -689,7 +695,7 @@ curl -sS http://localhost:8088/v1/presets/import_from_pack \
 ### Generate a timed sequence (cue list)
 
 ```bash
-curl -sS http://localhost:8088/v1/sequences/generate \
+curl -sS http://localhost:8088/api/sequences/generate \
   -H "Content-Type: application/json" \
   -d '{
     "name":"CandyMix",
@@ -700,10 +706,10 @@ curl -sS http://localhost:8088/v1/sequences/generate \
   }' | jq
 ```
 
-Generate a beat-aligned sequence (uses `beats.json` from `/v1/audio/analyze` or `/v1/xlights/import_sequence`):
+Generate a beat-aligned sequence (uses `beats.json` from `/api/audio/analyze` or `/api/xlights/import_sequence`):
 
 ```bash
-curl -sS http://localhost:8088/v1/sequences/generate \
+curl -sS http://localhost:8088/api/sequences/generate \
   -H "Content-Type: application/json" \
   -d '{
     "name":"BeatMix",
@@ -718,13 +724,13 @@ curl -sS http://localhost:8088/v1/sequences/generate \
 List sequences:
 
 ```bash
-curl -sS http://localhost:8088/v1/sequences/list | jq
+curl -sS http://localhost:8088/api/sequences/list | jq
 ```
 
 Play a sequence:
 
 ```bash
-curl -sS http://localhost:8088/v1/sequences/play \
+curl -sS http://localhost:8088/api/sequences/play \
   -H "Content-Type: application/json" \
   -d '{"file":"<sequence filename>","loop":false}' | jq
 ```
@@ -732,13 +738,13 @@ curl -sS http://localhost:8088/v1/sequences/play \
 Stop:
 
 ```bash
-curl -sS -X POST http://localhost:8088/v1/sequences/stop | jq
+curl -sS -X POST http://localhost:8088/api/sequences/stop | jq
 ```
 
 Play a generated sequence across the whole fleet (coordinator only):
 
 ```bash
-curl -sS http://localhost:8088/v1/fleet/sequences/start \
+curl -sS http://localhost:8088/api/fleet/sequences/start \
   -H "Content-Type: application/json" \
   -d '{"file":"<sequence filename>","loop":false}' | jq
 ```
@@ -748,13 +754,13 @@ curl -sS http://localhost:8088/v1/fleet/sequences/start \
 List patterns:
 
 ```bash
-curl -sS http://localhost:8088/v1/ddp/patterns | jq
+curl -sS http://localhost:8088/api/ddp/patterns | jq
 ```
 
 Start a pattern:
 
 ```bash
-curl -sS http://localhost:8088/v1/ddp/start \
+curl -sS http://localhost:8088/api/ddp/start \
   -H "Content-Type: application/json" \
   -d '{"pattern":"candy_spiral","duration_s":45,"brightness":120,"fps":25}' | jq
 ```
@@ -762,7 +768,7 @@ curl -sS http://localhost:8088/v1/ddp/start \
 Quadrant-aware motion using friendly controls:
 
 ```bash
-curl -sS http://localhost:8088/v1/ddp/start \
+curl -sS http://localhost:8088/api/ddp/start \
   -H "Content-Type: application/json" \
   -d '{
     "pattern":"quad_chase",
@@ -777,7 +783,7 @@ curl -sS http://localhost:8088/v1/ddp/start \
 Stop streaming:
 
 ```bash
-curl -sS -X POST http://localhost:8088/v1/ddp/stop | jq
+curl -sS -X POST http://localhost:8088/api/ddp/stop | jq
 ```
 
 ### Natural language director (optional)
@@ -785,7 +791,7 @@ curl -sS -X POST http://localhost:8088/v1/ddp/stop | jq
 Enable by setting `OPENAI_API_KEY` in `.env`.
 
 ```bash
-curl -sS http://localhost:8088/v1/command \
+curl -sS http://localhost:8088/api/command \
   -H "Content-Type: application/json" \
   -d '{"text":"Do a clockwise quadrant chase starting at the front for 25 seconds, then switch to a warm white classy look."}' | jq
 ```
@@ -794,7 +800,7 @@ curl -sS http://localhost:8088/v1/command \
 
 ## Multi-controller setup (tree + rooflines)
 
-Run one **API container per controller** (tree, rooflines, props). The coordinator also runs a separate `ui` reverse-proxy container that serves `/ui/*` and proxies `/v1/*` to the coordinator API.
+Run one **API container per controller** (tree, rooflines, props). The coordinator also runs a separate `ui` reverse-proxy container that serves `/ui/*` and proxies `/api/*` to the coordinator API.
 
 An example multi-agent compose file is included: `docker-compose.fleet.yml`.
 
@@ -840,7 +846,7 @@ Keep controllers on static IPs in your `172.16.200.0/24` LAN/VLAN. Example devic
 
 Notes:
 
-- In `docker-compose.fleet.yml`, host port `8088` is served by the `ui` container (reverse proxy) which forwards `/v1/*` to the coordinator API.
+- In `docker-compose.fleet.yml`, host port `8088` is served by the `ui` container (reverse proxy) which forwards `/api/*` to the coordinator API.
 - `WLED_TREE_URL` / `PIXEL_HOST` always point at the physical device IPs.
 - `A2A_PEERS` can use docker service DNS names (as shown) when everything runs in one compose stack.
 
@@ -857,13 +863,13 @@ ESPixelStick / non-WLED pixel controllers:
 
 ### Strategy: looks vs patterns
 
-- Use `POST /v1/fleet/apply_random_look` when you want quick “theme” changes on **WLED-only** devices (tree/rooflines/star_wled).
-- Use `POST /v1/fleet/invoke` with `action="start_ddp_pattern"` when you want a **single synced effect across everything**, including ESPixelStick props.
+- Use `POST /api/fleet/apply_random_look` when you want quick “theme” changes on **WLED-only** devices (tree/rooflines/star_wled).
+- Use `POST /api/fleet/invoke` with `action="start_ddp_pattern"` when you want a **single synced effect across everything**, including ESPixelStick props.
 
 Example: start a solid red “all props” look for 5 minutes:
 
 ```bash
-curl -sS http://localhost:8088/v1/fleet/invoke \
+curl -sS http://localhost:8088/api/fleet/invoke \
   -H "Content-Type: application/json" \
   -d '{
     "action":"start_ddp_pattern",
@@ -890,7 +896,7 @@ Recommended approach: treat **FPP as the scheduler/timebase (audio + calendar)**
 
 #### 1) FPP → Agent (triggers)
 
-- Use the coordinator’s `/v1/fpp/export/*` endpoints to generate **FPP shell scripts** that call the coordinator’s `/v1/fleet/*` endpoints.
+- Use the coordinator’s `/api/fpp/export/*` endpoints to generate **FPP shell scripts** that call the coordinator’s `/api/fleet/*` endpoints.
 - Copy the generated scripts from the coordinator’s data dir (example: `./data/tree/fpp/scripts/`) onto the FPP host and attach them to Events or Playlists.
 - Use `coordinator_base_url` as an IP/hostname reachable from the FPP host (Docker service names like `tree` will not resolve from FPP).
 
@@ -899,7 +905,7 @@ Trigger a generated sequence across the whole fleet:
 1. Generate a sequence on the coordinator:
 
 ```bash
-curl -sS http://localhost:8088/v1/sequences/generate \
+curl -sS http://localhost:8088/api/sequences/generate \
   -H "Content-Type: application/json" \
   -d '{"name":"ShowMix","duration_s":240,"step_s":8,"include_ddp":true,"seed":1337}' | jq
 ```
@@ -907,15 +913,15 @@ curl -sS http://localhost:8088/v1/sequences/generate \
 2. Start it across the fleet:
 
 ```bash
-curl -sS http://localhost:8088/v1/fleet/sequences/start \
+curl -sS http://localhost:8088/api/fleet/sequences/start \
   -H "Content-Type: application/json" \
-  -d '{"file":"<sequence filename from /v1/sequences/list>","loop":false}' | jq
+  -d '{"file":"<sequence filename from /api/sequences/list>","loop":false}' | jq
 ```
 
 3. Export an FPP script to trigger that sequence:
 
 ```bash
-curl -sS http://localhost:8088/v1/fpp/export/fleet_sequence_start_script \
+curl -sS http://localhost:8088/api/fpp/export/fleet_sequence_start_script \
   -H "Content-Type: application/json" \
   -d '{
     "sequence_file":"<sequence filename>",
@@ -928,12 +934,12 @@ curl -sS http://localhost:8088/v1/fpp/export/fleet_sequence_start_script \
 Optional: export an **event script** (name it `event-<id>.sh` for FPP events):
 
 ```bash
-curl -sS http://localhost:8088/v1/fpp/export/event_script \
+curl -sS http://localhost:8088/api/fpp/export/event_script \
   -H "Content-Type: application/json" \
   -d '{
     "event_id": 1,
     "coordinator_base_url":"http://172.16.200.10:8088",
-    "path":"/v1/fleet/sequences/start",
+    "path":"/api/fleet/sequences/start",
     "payload":{"file":"<sequence filename>","loop":false},
     "include_a2a_key":true
   }' | jq
@@ -943,11 +949,11 @@ curl -sS http://localhost:8088/v1/fpp/export/event_script \
 
 Set `FPP_BASE_URL` (and optionally `FPP_HEADERS_JSON`) on the coordinator, then use:
 
-- `/v1/fpp/playlist/start` / `/v1/fpp/playlist/stop`
-- `/v1/fpp/playlists/sync` to create/update playlists from sequence filenames
-- `/v1/fpp/playlists/import` to fetch playlists from FPP (and optionally store locally)
-- `/v1/fpp/event/trigger`
-- `/v1/command` can also call `fpp_start_playlist`, `fpp_stop_playlist`, and `fpp_trigger_event` when OpenAI is enabled.
+- `/api/fpp/playlist/start` / `/api/fpp/playlist/stop`
+- `/api/fpp/playlists/sync` to create/update playlists from sequence filenames
+- `/api/fpp/playlists/import` to fetch playlists from FPP (and optionally store locally)
+- `/api/fpp/event/trigger`
+- `/api/command` can also call `fpp_start_playlist`, `fpp_stop_playlist`, and `fpp_trigger_event` when OpenAI is enabled.
 
 #### 3) xLights helpers (best-effort)
 
@@ -955,7 +961,7 @@ Set `FPP_BASE_URL` (and optionally `FPP_HEADERS_JSON`) on the coordinator, then 
 - Import networks-only to a show-config skeleton:
 
 ```bash
-curl -sS http://localhost:8088/v1/xlights/import_networks \
+curl -sS http://localhost:8088/api/xlights/import_networks \
   -H "Content-Type: application/json" \
   -d '{
     "networks_file":"xlights/xlights_networks.xml",
@@ -969,7 +975,7 @@ curl -sS http://localhost:8088/v1/xlights/import_networks \
 Import an entire xLights project folder (networks + model channel ranges):
 
 ```bash
-curl -sS http://localhost:8088/v1/xlights/import_project \
+curl -sS http://localhost:8088/api/xlights/import_project \
   -H "Content-Type: application/json" \
   -d '{
     "project_dir":"xlights",
@@ -982,7 +988,7 @@ curl -sS http://localhost:8088/v1/xlights/import_project \
 Import a timing/beat grid from an xLights `.xsq` (for beat-aligned sequence generation):
 
 ```bash
-curl -sS http://localhost:8088/v1/xlights/import_sequence \
+curl -sS http://localhost:8088/api/xlights/import_sequence \
   -H "Content-Type: application/json" \
   -d '{
     "xsq_file":"xlights/song.xsq",
@@ -994,7 +1000,7 @@ curl -sS http://localhost:8088/v1/xlights/import_sequence \
 Limitations right now:
 
 - `.fseq` export is supported for **renderable** sequences only (procedural `ddp` steps). Steps of type `look` (WLED JSON states) are not offline-renderable into frames.
-- `.fseq` upload to FPP is supported via `POST /v1/fpp/upload_file` (uploads into `sequences/` by default).
+- `.fseq` upload to FPP is supported via `POST /api/fpp/upload_file` (uploads into `sequences/` by default).
 - xLights import is best-effort (networks + model channel ranges); `.xsq` import is limited to timing/beat grids only (no xLights effect data).
 
 Future opportunity (music sync):
@@ -1004,32 +1010,32 @@ Future opportunity (music sync):
 Audio analyzer (beats/BPM):
 
 ```bash
-curl -sS http://localhost:8088/v1/audio/analyze \
+curl -sS http://localhost:8088/api/audio/analyze \
   -H "Content-Type: application/json" \
   -d '{"audio_file":"music/song.wav","out_file":"audio/beats.json"}' | jq
 ```
 
 OpenAI (optional):
 
-- Put `OPENAI_API_KEY` in the coordinator’s env (`.env.tree`) if you want `/v1/command` to drive the whole fleet.
+- Put `OPENAI_API_KEY` in the coordinator’s env (`.env.tree`) if you want `/api/command` to drive the whole fleet.
 - If you want natural-language control on roofline agents directly, also set `OPENAI_API_KEY` in those env files.
 
 Then you can apply a consistent look everywhere:
 
 ```bash
-curl -sS http://localhost:8088/v1/fleet/apply_random_look \
+curl -sS http://localhost:8088/api/fleet/apply_random_look \
   -H "Content-Type: application/json" \
   -d '{"theme":"candy_cane","brightness":140}' | jq
 ```
 
-If you set `A2A_API_KEY`, add `-H "X-A2A-Key: <key>"` to calls to `/v1/a2a/*`, `/v1/fleet/*`, `/v1/fpp/*`, `/v1/xlights/*`, and `/v1/show/*`.
+If you set `A2A_API_KEY`, add `-H "X-A2A-Key: <key>"` to calls to `/api/a2a/*`, `/api/fleet/*`, `/api/fpp/*`, `/api/xlights/*`, and `/api/show/*`.
 
-Note: `/v1/fleet/apply_random_look` automatically skips peers that don’t support `apply_look_spec` (e.g. ESPixelStick pixel agents).
+Note: `/api/fleet/apply_random_look` automatically skips peers that don’t support `apply_look_spec` (e.g. ESPixelStick pixel agents).
 
 Stop everything across all controllers:
 
 ```bash
-curl -sS http://localhost:8088/v1/fleet/stop_all \
+curl -sS http://localhost:8088/api/fleet/stop_all \
   -H "Content-Type: application/json" \
   -d '{}' | jq
 ```
@@ -1093,7 +1099,7 @@ Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
 
 ## Troubleshooting
 
-**502 errors from `/v1/wled/*`:**
+**502 errors from `/api/wled/*`:**
 
 - Confirm `WLED_TREE_URL` is correct and reachable from the container host.
 - If using Docker in an LXC, confirm the container can reach your VLAN/subnet.
@@ -1101,7 +1107,7 @@ Trust Caddy’s internal CA on your phone (or use a real cert if you have one).
 **UI can’t reach the API (local dev):**
 
 - Run the backend on `http://localhost:8088` and the UI dev server on `http://localhost:5173/ui/`.
-- The UI dev server proxies `/v1/*` to the backend; if you change backend ports, update `ui/vite.config.ts`.
+- The UI dev server proxies `/api/*` to the backend; if you change backend ports, update `ui/vite.config.ts`.
 - If you’re testing from a phone on your LAN, run Vite with `npm run dev -- --host 0.0.0.0` and open `http://<your-lan-ip>:5173/ui/`.
 - If you bypass the proxy and hit the API cross-origin, set `CORS_ALLOW_ORIGINS` / `CORS_ALLOW_ORIGIN_REGEX` in your backend env (see `.env.example`).
 
@@ -1137,7 +1143,7 @@ python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8088
 ```
 
 Note: the backend does not serve the production UI by itself; in Docker, the `ui` container serves `/ui/*`
-and proxies `/v1/*` to the API. For local dev, use the Vite UI dev server below.
+and proxies `/api/*` to the API. For local dev, use the Vite UI dev server below.
 
 UI dev server (mobile-friendly React app):
 
@@ -1145,14 +1151,14 @@ UI dev server (mobile-friendly React app):
 cd ui
 npm install
 npm run dev
-# open http://localhost:5173/ui/ (Vite proxies /v1 to http://localhost:8088)
+# open http://localhost:5173/ui/ (Vite proxies /api to http://localhost:8088)
 
 # For phone/LAN testing:
 # npm run dev -- --host 0.0.0.0
 # open http://<your-lan-ip>:5173/ui/
 ```
 
-If you run the UI dev server without proxying `/v1` (different origin), set API CORS config (see `.env.example`).
+If you run the UI dev server without proxying `/api` (different origin), set API CORS config (see `.env.example`).
 
 UI E2E tests (Playwright):
 

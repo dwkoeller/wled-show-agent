@@ -209,6 +209,7 @@ async def startup(app: FastAPI | None = None) -> None:
             max_pixels_per_packet=settings.ddp_max_pixels_per_packet,
         )
         ddp = DDPStreamer(
+            max_bri=settings.wled_max_bri,
             wled=wled,
             geometry=geom,
             ddp_cfg=ddp_cfg,
@@ -310,7 +311,7 @@ async def startup(app: FastAPI | None = None) -> None:
                 return await fleet_service._peer_post_json(  # type: ignore[attr-defined]
                     state=st,
                     peer=peer,
-                    path="/v1/a2a/invoke",
+                    path="/api/a2a/invoke",
                     payload=payload,
                     timeout_s=float(timeout_s),
                 )

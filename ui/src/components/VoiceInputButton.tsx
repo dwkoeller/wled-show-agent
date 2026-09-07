@@ -134,7 +134,7 @@ export function VoiceInputButton({
       if (lang) form.append("language", lang);
       if (pr) form.append("prompt", pr);
       const useIntent = useServer && intentMode && Boolean(onIntent);
-      const endpoint = useIntent ? "/v1/voice/command" : "/v1/voice/transcribe";
+      const endpoint = useIntent ? "/api/voice/command" : "/api/voice/transcribe";
       const resp = await fetch(endpoint, {
         method: "POST",
         body: form,
@@ -265,6 +265,7 @@ export function VoiceInputButton({
     <Tooltip title={title}>
       <span>
         <IconButton
+          aria-label={title}
           color={listening ? "error" : "primary"}
           onClick={listening ? stop : useBrowser ? startSpeech : startRecording}
           disabled={disabled || processing || !supported}

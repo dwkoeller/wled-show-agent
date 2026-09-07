@@ -41,7 +41,7 @@ export function FppTools() {
   const [eventId, setEventId] = useState("1");
   const [eventScriptId, setEventScriptId] = useState("1");
   const [eventScriptPath, setEventScriptPath] = useState(
-    "/v1/fleet/sequences/start",
+    "/api/fleet/sequences/start",
   );
   const [eventScriptPayload, setEventScriptPayload] = useState(
     '{"file":"sequence_ShowMix_*.json","loop":false}',
@@ -80,7 +80,7 @@ export function FppTools() {
     try {
       const out: any = {};
       try {
-        out.status = await api("/v1/fpp/status", { method: "GET" });
+        out.status = await api("/api/fpp/status", { method: "GET" });
       } catch (e) {
         out.status = {
           ok: false,
@@ -88,7 +88,7 @@ export function FppTools() {
         };
       }
       try {
-        out.discover = await api("/v1/fpp/discover", { method: "GET" });
+        out.discover = await api("/api/fpp/discover", { method: "GET" });
       } catch (e) {
         out.discover = {
           ok: false,
@@ -97,7 +97,7 @@ export function FppTools() {
       }
       try {
         const pls = await api<{ ok: boolean; playlists: string[] }>(
-          "/v1/fpp/playlists",
+          "/api/fpp/playlists",
           { method: "GET" },
         );
         setPlaylists(pls.playlists || []);
@@ -133,7 +133,7 @@ export function FppTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fpp/playlist/start", {
+      await api("/api/fpp/playlist/start", {
         method: "POST",
         json: { name: playlistName, repeat: playlistRepeat },
       });
@@ -149,7 +149,7 @@ export function FppTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fpp/playlist/stop", { method: "POST", json: {} });
+      await api("/api/fpp/playlist/stop", { method: "POST", json: {} });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -162,7 +162,7 @@ export function FppTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fpp/event/trigger", {
+      await api("/api/fpp/event/trigger", {
         method: "POST",
         json: { event_id: parseInt(eventId || "1", 10) },
       });
@@ -178,7 +178,7 @@ export function FppTools() {
     setBusy(true);
     setError(null);
     try {
-      await api("/v1/fpp/upload_file", {
+      await api("/api/fpp/upload_file", {
         method: "POST",
         json: {
           local_file: uploadLocalFile,
@@ -202,7 +202,7 @@ export function FppTools() {
     setError(null);
     try {
       const sequences = parseSequenceList(syncSequences);
-      const res = await api("/v1/fpp/playlists/sync", {
+      const res = await api("/api/fpp/playlists/sync", {
         method: "POST",
         json: {
           name: syncName.trim(),
@@ -225,7 +225,7 @@ export function FppTools() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api("/v1/fpp/playlists/import", {
+      const res = await api("/api/fpp/playlists/import", {
         method: "POST",
         json: { name: syncName.trim(), from_fpp: true, write_local: true },
       });
@@ -244,11 +244,11 @@ export function FppTools() {
       const payload = eventScriptPayload.trim()
         ? JSON.parse(eventScriptPayload)
         : {};
-      const res = await api("/v1/fpp/export/event_script", {
+      const res = await api("/api/fpp/export/event_script", {
         method: "POST",
         json: {
           event_id: parseInt(eventScriptId || "1", 10),
-          path: eventScriptPath.trim() || "/v1/fleet/sequences/start",
+          path: eventScriptPath.trim() || "/api/fleet/sequences/start",
           payload,
           out_filename: eventScriptFilename.trim()
             ? eventScriptFilename.trim()

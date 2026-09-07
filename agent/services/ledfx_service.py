@@ -558,7 +558,7 @@ async def ledfx_fleet_summary(
                 out = await fleet_service._peer_post_json(
                     state=state,
                     peer=peer,
-                    path="/v1/a2a/invoke",
+                    path="/api/a2a/invoke",
                     payload=payload,
                     timeout_s=timeout_s,
                 )
