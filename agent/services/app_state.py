@@ -21,7 +21,7 @@ from ddp_streamer import DDPStreamer
 from geometry import TreeGeometry
 from sequence_service import SequenceService
 from fleet_sequence_service import FleetSequenceService
-from services import a2a_service, fleet_service, metrics_service
+from services import a2a_service, controller_telemetry, fleet_service, metrics_service
 from services.a2a_peers_service import parse_a2a_peers
 from services.blocking_service import BlockingService, ProcessService
 from services.director_service import create_director
@@ -633,6 +633,7 @@ async def startup(app: FastAPI | None = None) -> None:
             async def _metrics_history_loop() -> None:
                 while True:
                     try:
+                        await controller_telemetry.record(st)
                         snapshot = await metrics_service.collect_metrics_snapshot(st)
                         jobs_count = int(
                             (snapshot.get("jobs") or {}).get("count", 0) or 0
@@ -690,6 +691,10 @@ async def startup(app: FastAPI | None = None) -> None:
                                 if settings.metrics_history_max_days > 0
                                 else None
                             ),
+                        )
+                        await db.enforce_controller_telemetry_retention(
+                            max_rows=(settings.metrics_history_max_rows if settings.metrics_history_max_rows > 0 else None),
+                            max_days=(settings.metrics_history_max_days if settings.metrics_history_max_days > 0 else None),
                         )
                         st.metrics_history_retention_last = {
                             "at": time.time(),

@@ -424,6 +424,28 @@ class MetricsSampleRecord(SQLModel, table=True):
     spool_queued_bytes: int = Field(default=0)
 
 
+class ControllerTelemetryRecord(SQLModel, table=True):
+    """WLED controller performance samples for history and alerting."""
+
+    __tablename__ = "controller_telemetry"
+    __table_args__ = (Index("ix_controller_telemetry_agent_created_at", "agent_id", "created_at"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: str = Field(index=True, max_length=128)
+    created_at: float = Field(index=True)
+    ok: bool = Field(default=False)
+    latency_ms: float | None = Field(default=None)
+    uptime_s: float | None = Field(default=None)
+    free_heap: int | None = Field(default=None)
+    rssi_dbm: int | None = Field(default=None)
+    temperature_c: float | None = Field(default=None)
+    led_count: int | None = Field(default=None)
+    power_w: float | None = Field(default=None)
+    fps: float | None = Field(default=None)
+    error: str | None = Field(default=None, max_length=512)
+    alerts: List[str] = Field(sa_column=Column(JSON), default_factory=list)
+
+
 class AuthUserRecord(SQLModel, table=True):
     """
     Auth users stored in SQL for multi-user logins.

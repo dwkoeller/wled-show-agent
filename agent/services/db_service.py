@@ -34,6 +34,7 @@ from sql_store import (
     LastAppliedRecord,
     LeaseRecord,
     MetricsSampleRecord,
+    ControllerTelemetryRecord,
     PackIngestRecord,
     OrchestrationPeerResultRecord,
     OrchestrationPresetRecord,
@@ -1993,6 +1994,61 @@ class DatabaseService:
             except Exception:
                 pass
             return int(rec.id) if rec.id is not None else None
+
+    async def add_controller_telemetry(self, *, created_at: float, sample: dict[str, Any], agent_id: str | None = None) -> int | None:
+        aid = str(agent_id or self.agent_id).strip()
+        if not aid:
+            return None
+        async with AsyncSession(self.engine) as session:
+            rec = ControllerTelemetryRecord(
+                agent_id=aid, created_at=float(created_at), ok=bool(sample.get("ok")),
+                latency_ms=sample.get("latency_ms"), uptime_s=sample.get("uptime_s"),
+                free_heap=sample.get("free_heap"), rssi_dbm=sample.get("rssi_dbm"),
+                temperature_c=sample.get("temperature_c"), led_count=sample.get("led_count"),
+                power_w=sample.get("power_w"), fps=sample.get("fps"),
+                error=str(sample.get("error"))[:512] if sample.get("error") else None,
+                alerts=list(sample.get("alerts") or []),
+            )
+            session.add(rec)
+            await session.commit()
+            return int(rec.id) if rec.id is not None else None
+
+    async def list_controller_telemetry(self, *, limit: int = 200, since: float | None = None, until: float | None = None, offset: int = 0, order: str = "desc", agent_id: str | None = None) -> list[dict[str, Any]]:
+        aid = str(agent_id or self.agent_id).strip()
+        async with AsyncSession(self.engine) as session:
+            stmt = select(ControllerTelemetryRecord)
+            if aid: stmt = stmt.where(ControllerTelemetryRecord.agent_id == aid)
+            if since is not None: stmt = stmt.where(ControllerTelemetryRecord.created_at >= float(since))
+            if until is not None: stmt = stmt.where(ControllerTelemetryRecord.created_at <= float(until))
+            stmt = stmt.order_by(ControllerTelemetryRecord.created_at.asc() if str(order).lower() == "asc" else ControllerTelemetryRecord.created_at.desc()).offset(max(0, int(offset))).limit(max(1, min(20000, int(limit))))
+            return [r.model_dump() for r in (await session.exec(stmt)).all()]
+
+    async def controller_telemetry_stats(self, *, agent_id: str | None = None) -> dict[str, Any]:
+        aid = str(agent_id or self.agent_id).strip()
+        async with AsyncSession(self.engine) as session:
+            stmt = select(func.count(), func.min(ControllerTelemetryRecord.created_at), func.max(ControllerTelemetryRecord.created_at))
+            if aid: stmt = stmt.where(ControllerTelemetryRecord.agent_id == aid)
+            row = (await session.exec(stmt)).one()
+            return {"count": int(row[0] or 0), "oldest": float(row[1]) if row[1] is not None else None, "newest": float(row[2]) if row[2] is not None else None}
+
+    async def enforce_controller_telemetry_retention(self, *, max_rows: int | None, max_days: int | None, agent_id: str | None = None) -> dict[str, Any]:
+        aid = str(agent_id or self.agent_id).strip(); deleted_days = deleted_rows = 0
+        async with AsyncSession(self.engine) as session:
+            if max_days and int(max_days) > 0:
+                stmt = delete(ControllerTelemetryRecord).where(ControllerTelemetryRecord.created_at < _now() - int(max_days) * 86400)
+                if aid: stmt = stmt.where(ControllerTelemetryRecord.agent_id == aid)
+                deleted_days = int(getattr(await session.exec(stmt), "rowcount", 0) or 0)
+            if max_rows and int(max_rows) > 0:
+                count_stmt = select(func.count()).select_from(ControllerTelemetryRecord)
+                if aid: count_stmt = count_stmt.where(ControllerTelemetryRecord.agent_id == aid)
+                total = int((await session.exec(count_stmt)).one() or 0); excess = total - int(max_rows)
+                if excess > 0:
+                    ids_stmt = select(ControllerTelemetryRecord.id).order_by(ControllerTelemetryRecord.created_at.asc()).limit(excess)
+                    if aid: ids_stmt = ids_stmt.where(ControllerTelemetryRecord.agent_id == aid)
+                    ids = [x for x in (await session.exec(ids_stmt)).all() if x is not None]
+                    if ids: deleted_rows = int(getattr(await session.exec(delete(ControllerTelemetryRecord).where(ControllerTelemetryRecord.id.in_(ids))), "rowcount", 0) or 0)
+            await session.commit()
+        return {"ok": True, "deleted_by_days": deleted_days, "deleted_by_rows": deleted_rows, "max_days": int(max_days or 0), "max_rows": int(max_rows or 0)}
 
     async def list_metrics_samples(
         self,

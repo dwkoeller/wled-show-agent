@@ -607,6 +607,8 @@ UI-facing metadata backed by SQL:
 ### Metrics
 
 - `GET /api/metrics` – lightweight JSON metrics (uptime, scheduler, current status)
+- `GET /api/metrics/controller` – current WLED controller telemetry (latency, uptime, heap, RSSI, temperature, LED count, power and alerts)
+- `GET /api/metrics/controller/history` – persisted controller telemetry samples with `limit`, `offset`, `since`, `until`, and `order` query parameters
 - `GET /metrics` – Prometheus exposition format
   - When `AUTH_ENABLED=true`: set `METRICS_PUBLIC=true` or configure `METRICS_SCRAPE_TOKEN` + `METRICS_SCRAPE_HEADER`.
   - Outbound HTTP metrics include `target_kind` labels like `wled`, `fpp`, `ledfx`, and `peer`.

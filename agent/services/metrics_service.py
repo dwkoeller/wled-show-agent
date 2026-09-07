@@ -17,6 +17,7 @@ from services.auth_service import require_a2a_auth, require_admin
 from services.state import AppState, get_state
 from utils.outbound_metrics import REGISTRY as OUTBOUND_REGISTRY
 from utils.rate_limit_metrics import REGISTRY as RATE_LIMIT_REGISTRY
+from services import controller_telemetry
 
 
 async def collect_metrics_snapshot(state: AppState) -> Dict[str, Any]:
@@ -112,7 +113,36 @@ async def collect_metrics_snapshot(state: AppState) -> Dict[str, Any]:
         "events": {"bus": events_bus, "spool": spool_stats},
         "outbound": outbound,
         "rate_limit": rate_limit,
+        "controller": getattr(state, "controller_telemetry_last", None),
     }
+
+
+async def controller_metrics(
+    request: Request,
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    current = await controller_telemetry.sample(state)
+    payload = {**current, "at": time.time()}
+    state.controller_telemetry_last = payload
+    return {"ok": True, "telemetry": payload}
+
+
+async def controller_metrics_history(
+    request: Request,
+    limit: int = 200,
+    offset: int = 0,
+    since: float | None = None,
+    until: float | None = None,
+    order: str = "desc",
+    _: None = Depends(require_a2a_auth),
+    state: AppState = Depends(get_state),
+) -> Dict[str, Any]:
+    db = getattr(state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    rows = await db.list_controller_telemetry(limit=max(1, min(5000, int(limit))), offset=max(0, int(offset)), since=since, until=until, order=order)
+    return {"ok": True, "samples": rows, "count": len(rows), "limit": int(limit), "offset": int(offset)}
 
 
 async def metrics(

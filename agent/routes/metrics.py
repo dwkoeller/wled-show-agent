@@ -8,6 +8,8 @@ from services import metrics_service
 router = APIRouter()
 
 router.add_api_route("/api/metrics", metrics_service.metrics, methods=["GET"])
+router.add_api_route("/api/metrics/controller", metrics_service.controller_metrics, methods=["GET"])
+router.add_api_route("/api/metrics/controller/history", metrics_service.controller_metrics_history, methods=["GET"])
 router.add_api_route(
     "/api/metrics/history", metrics_service.metrics_history, methods=["GET"]
 )

@@ -35,6 +35,22 @@ type MetricsRes = {
       queued_bytes?: number;
     };
   };
+  controller?: ControllerTelemetry | null;
+};
+
+type ControllerTelemetry = {
+  ok?: boolean;
+  at?: number;
+  latency_ms?: number;
+  uptime_s?: number;
+  free_heap?: number;
+  rssi_dbm?: number;
+  temperature_c?: number;
+  led_count?: number;
+  power_w?: number;
+  fps?: number;
+  error?: string;
+  alerts?: string[];
 };
 
 type MetricsSample = {
@@ -383,6 +399,21 @@ export function MetricsTools() {
               {error}
             </Alert>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Typography variant="subtitle1">WLED controller performance</Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
+            <Chip size="small" label={metrics?.controller?.ok ? "online" : "offline"} color={metrics?.controller?.ok ? "success" : "warning"} />
+            <Chip size="small" label={`latency ${metrics?.controller?.latency_ms ?? "—"} ms`} variant="outlined" />
+            <Chip size="small" label={`RSSI ${metrics?.controller?.rssi_dbm ?? "—"} dBm`} variant="outlined" />
+            <Chip size="small" label={`temp ${metrics?.controller?.temperature_c ?? "—"} °C`} variant="outlined" />
+            <Chip size="small" label={`heap ${metrics?.controller?.free_heap ?? "—"}`} variant="outlined" />
+            {(metrics?.controller?.alerts ?? []).map((alert) => <Chip key={alert} size="small" label={alert} color="warning" />)}
+          </Stack>
+          {metrics?.controller?.error ? <Alert severity="warning" sx={{ mt: 1 }}>{metrics.controller.error}</Alert> : null}
         </CardContent>
       </Card>
 

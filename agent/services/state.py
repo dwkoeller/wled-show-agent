@@ -22,6 +22,7 @@ class AppState:
     wled_cooldown: AsyncCooldown | None = None
     # Last applied WLED states, newest first; used for a safe one-step undo.
     wled_undo_states: list[dict[str, Any]] = field(default_factory=list)
+    controller_telemetry_last: dict[str, Any] | None = None
 
     # WLED clients/services.
     wled: Any = None  # AsyncWLEDClient

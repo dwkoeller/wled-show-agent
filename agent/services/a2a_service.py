@@ -9,6 +9,7 @@ from ddp_control import prepare_ddp_params
 from models.requests import A2AInvokeRequest
 from services.audit_logger import log_event
 from services.auth_service import require_a2a_auth
+from services import controller_telemetry
 from services.state import AppState, get_state
 from fpp_client import AsyncFPPClient
 from utils.outbound_http import retry_policy_from_settings
@@ -549,6 +550,7 @@ async def _a2a_health_status(
         try:
             info = await state.wled.get_info()
             st = await state.wled.get_state()
+            telemetry = controller_telemetry.extract(info or {}, st or {}, 0)
             wled.update(
                 {
                     "ok": True,
@@ -558,6 +560,7 @@ async def _a2a_health_status(
                     "on": st.get("on"),
                     "preset": st.get("ps"),
                     "live": st.get("live"),
+                    "telemetry": telemetry,
                 }
             )
         except Exception as e:
