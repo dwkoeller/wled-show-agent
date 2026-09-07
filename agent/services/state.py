@@ -20,6 +20,8 @@ class AppState:
     # WLED runtime config (derived on startup).
     segment_ids: list[int] = field(default_factory=list)
     wled_cooldown: AsyncCooldown | None = None
+    # Last applied WLED states, newest first; used for a safe one-step undo.
+    wled_undo_states: list[dict[str, Any]] = field(default_factory=list)
 
     # WLED clients/services.
     wled: Any = None  # AsyncWLEDClient

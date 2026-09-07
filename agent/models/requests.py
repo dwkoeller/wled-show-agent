@@ -11,6 +11,21 @@ class ApplyStateRequest(BaseModel):
     )
 
 
+class WledDiscoveryRequest(BaseModel):
+    subnet: str = Field("172.16.200.0/24", description="IPv4 subnet to probe")
+    timeout_s: float = Field(0.35, ge=0.1, le=3.0)
+    max_hosts: int = Field(256, ge=1, le=1024)
+
+
+class WledCalibrationRequest(BaseModel):
+    segments: Optional[List[Dict[str, Any]]] = None
+    brightness: Optional[int] = Field(default=None, ge=1, le=255)
+
+
+class WledPreviewRequest(BaseModel):
+    state: Dict[str, Any] = Field(..., description="WLED state to validate without writing")
+
+
 class GenerateLooksRequest(BaseModel):
     total_looks: int = Field(800, ge=50, le=5000)
     themes: List[str] = Field(

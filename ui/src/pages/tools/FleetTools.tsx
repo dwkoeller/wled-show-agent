@@ -1,6 +1,9 @@
 import RefreshIcon from "@mui/icons-material/Refresh";
 import HubIcon from "@mui/icons-material/Hub";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import SearchIcon from "@mui/icons-material/Search";
+import UndoIcon from "@mui/icons-material/Undo";
+import TuneIcon from "@mui/icons-material/Tune";
 import {
   Alert,
   Button,
@@ -360,6 +363,14 @@ export function FleetTools() {
   const [detailPeerStatus, setDetailPeerStatus] = useState("");
   const [detailStepsFailuresOnly, setDetailStepsFailuresOnly] = useState(false);
   const [detailPeersFailuresOnly, setDetailPeersFailuresOnly] = useState(true);
+  const [discoverySubnet, setDiscoverySubnet] = useState("172.16.200.0/24");
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<Record<string, unknown> | null>(null);
+  const [calibrationBusy, setCalibrationBusy] = useState(false);
+  const [calibrationResult, setCalibrationResult] = useState<Record<string, unknown> | null>(null);
+  const [calibrationJson, setCalibrationJson] = useState("[]");
+  const [previewJson, setPreviewJson] = useState('{"on":true,"bri":128}');
+  const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
 
   const buildHistoryQuery = (lim: number, off: number) => {
     const q = new URLSearchParams();
@@ -499,6 +510,66 @@ export function FleetTools() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const discoverWled = async () => {
+    setDiscoveryBusy(true);
+    setError(null);
+    try {
+      const res = await api<Record<string, unknown>>("/api/wled/discover", {
+        method: "POST",
+        json: { subnet: discoverySubnet.trim() || "172.16.200.0/24" },
+      });
+      setDiscoveryResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDiscoveryBusy(false);
+    }
+  };
+
+  const loadCalibration = async () => {
+    setCalibrationBusy(true);
+    setError(null);
+    try {
+      setCalibrationResult(await api<Record<string, unknown>>("/api/wled/calibration", { method: "GET" }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCalibrationBusy(false);
+    }
+  };
+
+  const applyCalibration = async () => {
+    setCalibrationBusy(true);
+    setError(null);
+    try {
+      const segments = JSON.parse(calibrationJson);
+      if (!Array.isArray(segments)) throw new Error("Segments must be a JSON array.");
+      setCalibrationResult(await api<Record<string, unknown>>("/api/wled/calibration", { method: "POST", json: { segments } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCalibrationBusy(false);
+    }
+  };
+
+  const previewState = async () => {
+    setError(null);
+    try {
+      setPreviewResult(await api<Record<string, unknown>>("/api/wled/preview", { method: "POST", json: { state: JSON.parse(previewJson) } }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const undoWled = async () => {
+    setError(null);
+    try {
+      setPreviewResult(await api<Record<string, unknown>>("/api/wled/undo", { method: "POST", json: {} }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -1002,6 +1073,51 @@ export function FleetTools() {
             Refresh
           </Button>
         </CardActions>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <SearchIcon />
+            <Typography variant="h6">Controller onboarding</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Probe a bounded subnet for WLED devices. Discovery is read-only and does not change controller state.
+          </Typography>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
+            <TextField label="IPv4 subnet" value={discoverySubnet} onChange={(e) => setDiscoverySubnet(e.target.value)} size="small" />
+            <Button startIcon={<SearchIcon />} variant="contained" onClick={() => void discoverWled()} disabled={discoveryBusy}>
+              {discoveryBusy ? "Scanning…" : "Discover WLED"}
+            </Button>
+          </Stack>
+          {discoveryResult ? <Typography component="pre" variant="body2" sx={{ mt: 2, whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto" }}>{JSON.stringify(discoveryResult, null, 2)}</Typography> : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <TuneIcon />
+            <Typography variant="h6">Calibration and safety</Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Read the live segment geometry, preview a state with brightness limits applied, or undo the latest WLED state change.
+          </Typography>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
+            <Button startIcon={<TuneIcon />} onClick={() => void loadCalibration()} disabled={calibrationBusy}>{calibrationBusy ? "Loading…" : "Read calibration"}</Button>
+            <Button startIcon={<UndoIcon />} color="warning" onClick={() => void undoWled()}>Undo last WLED change</Button>
+          </Stack>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
+            <TextField label="Segments JSON" value={calibrationJson} onChange={(e) => setCalibrationJson(e.target.value)} size="small" fullWidth helperText='Example: [{"id":0,"start":0,"stop":100}]' />
+            <Button onClick={() => void applyCalibration()} variant="outlined" disabled={calibrationBusy}>Apply segments</Button>
+          </Stack>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
+            <TextField label="Preview state JSON" value={previewJson} onChange={(e) => setPreviewJson(e.target.value)} size="small" fullWidth />
+            <Button onClick={() => void previewState()} variant="outlined">Preview only</Button>
+          </Stack>
+          {calibrationResult ? <Typography component="pre" variant="body2" sx={{ mt: 2, whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto" }}>{JSON.stringify(calibrationResult, null, 2)}</Typography> : null}
+          {previewResult ? <Typography component="pre" variant="body2" sx={{ mt: 2, whiteSpace: "pre-wrap", maxHeight: 220, overflow: "auto" }}>{JSON.stringify(previewResult, null, 2)}</Typography> : null}
+        </CardContent>
       </Card>
 
       <Card>

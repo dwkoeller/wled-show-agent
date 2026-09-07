@@ -378,6 +378,10 @@ Base URL below assumes you’re running locally: `http://localhost:8088`
 - `GET /api/wled/info`
 - `GET /api/wled/state`
 - `GET /api/wled/segments`
+- `POST /api/wled/discover` – bounded, read-only subnet scan for WLED devices
+- `GET/POST /api/wled/calibration` – inspect or apply segment and brightness calibration
+- `POST /api/wled/preview` – validate and brightness-clamp a state without writing it
+- `POST /api/wled/undo` – restore the most recent applied WLED state
 - `GET /api/segments/layout`
 - `GET /api/segments/orientation`
 
